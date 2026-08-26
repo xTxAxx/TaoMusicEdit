@@ -1,0 +1,58 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# ============ 虚拟环境 / 临时工具 ============
+.venv/
+venv/
+env/
+.deadcode-tools/
+
+# ============ 测试与覆盖率 ============
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ============ IDE / 编辑器 ============
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# ============ 运行期生成的数据（TaoMusicEdit） ============
+# vendored 依赖：通过 py -m pip install -r webui/requirements.txt 重建
+webui/_vendor/
+
+# SQLite 检测结果缓存（运行时生成）
+webui/detect_cache.db
+webui/detect_cache.db-shm
+webui/detect_cache.db-wal
+
+# JSON 缓存迁移遗留文件
+webui/detect_cache.json.migrated
+
+# 运行时用户设置（workspace / 输出目录 / 参数），由 webui/settings.py 生成
+webui/settings.json
+
+# ============ 测试 / 演示用视频素材（避免提交大体积二进制） ============
+/input1.mp4
+/input2.mp4
+/input3.mp4
+# 如后续需要忽略任意目录下的视频素材，可取消下面注释：
+# *.mp4
+# *.mkv
+# *.mov
+# *.avi
+
+# ============ 操作系统 ============
+Thumbs.db
+.DS_Store
+desktop.ini

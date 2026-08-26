@@ -1,0 +1,237 @@
+# TaoMusicEdit
+
+视频检测与裁剪工作台：集成了 **detector**（视频颜色检测）与 **trimmer**（高精度视频裁剪）两个模块，
+并提供一套完整的 **Web UI** 将二者串联成一条可视化工作流：
+
+- 选择视频 → 参数化 Detect 检测目标颜色帧 → 自动关联为 Trim 裁剪起点 → 一键裁剪输出。
+
+---
+
+## 1. 功能特性
+
+### Web UI（可视化工作流）
+- **工作区管理**：输入/浏览工作目录，递归文件树浏览，可按需过滤仅显示视频。
+- **输出目录配置**：独立设置裁剪输出目录，并校验可写性。
+- **播放器**：流式播放、逐帧（上一帧/下一帧）、精确跳转、进度条、音量、检测标记覆盖层。
+- **Detect / Trim 异步任务**：后台线程执行，SSE 实时推送进度，支持取消。
+- **批处理**：批量 Detect / 批量 Trim 分开执行；文件树支持「全选 / 清空」、
+  Ctrl 单选、Shift 区间选择；批处理逐文件汇报进度，单个文件失败不影响整体。
+- **参数面板**：数据驱动生成 detector / trimmer 全部可调参数，即时校验与行内错误提示。
+- **设置持久化**：工作区、输出目录及全部参数自动保存到配置文件，重启后自动恢复；
+  裁剪起点（start_mode / start_value）因视频而异，不随配置保存，启动时默认留空；
+  侧边栏底部提供「恢复默认设置」按钮一键还原。
+- **结果可视化**：检测点标注、目标帧定位、裁剪产物列表。
+
+### detector（视频颜色检测）
+基于「反向跳帧 + 局部细化」算法，在视频前 N 秒内定位四个指定位置颜色匹配的**结尾帧**，
+全程仅解码约 40~50 帧，不整片解码。详细说明见 [detector/README.md](detector/README.md)。
+
+### trimmer（高精度视频裁剪）
+基于 FFmpeg，支持按**帧序号**或**时间戳**指定保留起点，默认流复制快速裁剪，可选重编码与 GPU 加速，
+支持完整视频 / 无声视频 / 纯音频 / 分离音视频四种输出模式。详细说明见 [trimmer/README.md](trimmer/README.md)。
+
+---
+
+## 2. 项目结构
+
+```
+TaoMusicEdit/
+├── run.py                  # ★ 统一启动入口（推荐从这里启动）
+├── detector/               # 视频颜色检测模块（可独立使用）
+│   ├── cli.py / __main__.py# 命令行入口
+│   ├── config.py           # DetectorConfig 全部可调参数
+│   ├── core/               # 核心算法（algorithm/detector/matcher/errors）
+│   ├── utils/              # ffmpeg 抽帧、颜色工具、日志
+│   └── tests/              # 测试
+├── trimmer/                # 视频裁剪模块（可独立使用）
+│   ├── cli.py / __main__.py# 命令行入口
+│   ├── core/               # 核心（trimmer/ffmpeg/probe/errors）
+│   ├── utils/              # 校验、日志
+│   └── tests/              # 测试
+└── webui/                  # Web UI 后端 + 前端
+    ├── app.py              # Flask 主应用（API 路由、任务编排）
+    ├── jobs.py             # 异步任务管理器（后台线程 + SSE + 取消）
+    ├── settings.py         # 设置持久化（读写 webui/settings.json）
+    ├── settings.json       # 运行时生成的配置文件（首次保存后出现）
+    ├── _vendor/            # 本地 vendored Flask 及其依赖（无需 pip 安装）
+    ├── templates/index.html
+    ├── static/
+    │   ├── css/style.css
+    │   └── js/  (params.js / player.js / app.js)
+    └── requirements.txt
+```
+
+---
+
+## 3. 环境要求
+
+- Python 3.8+（本项目在 3.13 下开发验证）
+- [FFmpeg](https://ffmpeg.org/)（含 `ffmpeg` 与 `ffprobe`，已加入 PATH）
+- Python 依赖：
+  - `opencv-python`、`numpy`（detector 使用）
+  - `flask`（Web UI 使用，已本地化到 `webui/_vendor`，无需额外安装）
+
+```bash
+pip install opencv-python numpy
+# 如需重新安装本地 Flask：py -m pip install -r webui/requirements.txt
+```
+
+---
+
+## 4. 快速开始（统一入口）
+
+在项目根目录运行：
+
+```bash
+python run.py        # 或 py run.py
+```
+
+启动后终端会打印访问地址，浏览器打开 **http://127.0.0.1:8765/** 即可使用。
+
+可选环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WEBUI_HOST` | `127.0.0.1` | 监听地址 |
+| `WEBUI_PORT` | `8765` | 监听端口 |
+
+> 也可直接运行 `py webui\app.py`，效果等同。
+
+---
+
+## 5. Web UI 使用流程
+
+1. **载入工作区**：在侧边栏「工作区」输入或浏览目录 → 点「载入」；
+   文件树中展开目录并点击选择视频。
+2. **设置输出目录**（可选）：在侧边栏「输出区」指定裁剪结果保存位置，默认保存到项目根目录。
+3. **调整参数**：在侧边栏「Detector · 颜色检测」与「Trimmer · 视频裁剪」面板修改各参数，
+   参数变化会自动保存。
+4. **Detect**：点击播放器控制行右侧的 `Detect` 按钮执行颜色检测，
+   下方显示进度与结果；检测命中后**自动关联到 Trim 起点**并在播放器中标注目标帧。
+5. **Trim**：确认起点（可手动修改，或用「设为起点」捕获当前帧）后点击 `Trim` 按钮完成裁剪，
+   结果面板列出输出文件列表。
+6. **设置管理**：修改的参数与工作区/输出目录会自动持久化；侧边栏底部「恢复默认设置」
+   可一键还原为出厂默认值。
+
+### 批处理（批量 Detect / 批量 Trim）
+
+1. **选择文件**：在文件树中选择要批处理的视频——
+   - 单击：单选该文件（同时载入播放器）；
+   - `Ctrl` + 单击：切换选中/取消该文件（多选）；
+   - `Shift` + 单击：从上次点击处到当前文件**区间选择**；
+   - 「全选」：选中当前工作区全部视频文件；「清空」取消所有选择；
+   - 右上角「已选 N 个」实时显示选中数量。
+2. **批量 Detect**：点击「批量 Detect」按钮，对选中文件逐个执行颜色检测，
+   批处理面板实时显示当前文件与整体进度；结束后列出每个文件的检测结果
+   （命中帧号 / 时间戳 / 未命中 / 失败原因），结果会自动缓存供批量裁剪使用。
+3. **批量 Trim**：先选择「裁剪起点」来源——
+   - **检测结果**：每个文件使用其批量 Detect 的结果作为起点（无检测结果的文件会标记跳过）；
+   - **手动参数**：所有文件统一使用「Trimmer」面板中的起点方式与起点值；
+   再点击「批量 Trim」按钮逐文件裁剪，结束后列出每个文件的输出文件列表。
+4. **取消**：批处理执行中可随时点击「取消」终止整个批次；单个文件失败不会中断后续文件。
+
+### 参数说明
+
+**Detector**（详见 [detector/README.md](detector/README.md)）
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| 目标颜色 | `#F7F10F` | 支持 `#RRGGBB` 或 `R,G,B` |
+| 置信度阈值 | `0.97` | 匹配阈值 [0,1]，越高越严格 |
+| 颜色容差 | `10.0` | RGB 欧氏距离容差，兼容有损编码 |
+| 检测点自动缩放 | 开 | 按视频分辨率等比缩放检测点 |
+| 检测窗口(秒) | `40` | 只检测视频前 N 秒 |
+| 反向跳帧起始(秒) | `35` | 反向抽帧起始时间 |
+| 粗扫步长(秒) | `5` | 初始大步长 |
+| 细扫步长(秒) | `1` | 细化步长（须 ≤ 粗扫） |
+| 帧提取器 | `ffmpeg` | `ffmpeg`（精确）/ `opencv`（回退） |
+
+**Trimmer**（详见 [trimmer/README.md](trimmer/README.md)）
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| 起点方式 | `帧序号` | 帧序号 `-f` / 时间戳 `-t` 二选一 |
+| 裁剪起点 | 必填 | 可先 Detect 或捕获帧后自动填入 |
+| 输出文件名后缀 | `_trim` | `input.mp4 → input_trim.mp4` |
+| 输出模式 | `完整视频` | 完整 / 无声视频 / 纯音频 / 分离音视频 |
+| 覆盖已存在文件 | 关 | 输出已存在时直接覆盖 |
+| 重编码 | 关 | 默认流复制（快速）；重编码可精确到帧 |
+| GPU 加速 | `自动` | 自动 / 关闭 / 强制 |
+| 视频/音频编码器 | 空 | 重编码时指定，留空自动匹配 |
+
+---
+
+## 6. 配置持久化
+
+- 配置文件：`webui/settings.json`（首次保存设置后自动生成）。
+- 保存内容：工作区路径、输出目录、detector 全部参数、trimmer 全部参数。
+- 保存时机：任意参数变化、工作区/输出目录变化后 **自动防抖保存**（约 400ms）；
+  无需手动操作。
+- 启动恢复：应用启动时读取配置文件，自动恢复上次的工作区、输出目录与参数；
+  配置不存在或路径失效时回退到项目根目录。
+- 恢复默认：侧边栏底部的「恢复默认设置」按钮，将工作区、输出目录及全部参数重置为默认值。
+
+相关接口：
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/settings` | GET | 读取当前设置与默认值 |
+| `/api/settings` | POST | 保存设置（服务端合并后落盘） |
+| `/api/settings/reset` | POST | 恢复默认设置（删除配置文件） |
+
+---
+
+## 7. 模块独立使用
+
+两个模块均可脱离 Web UI 独立通过命令行或 Python API 使用。
+
+### detector
+
+```bash
+py detector\cli.py input1.mp4
+# 输出: frame=734 time=24.466666666666665
+py -m detector input1.mp4 --target '#F7F10F' --threshold 0.9
+```
+
+```python
+from detector import VideoColorDetector
+frame, time = VideoColorDetector().detect("input1.mp4")
+print(frame, time)
+```
+
+### trimmer
+
+```bash
+py trimmer\cli.py input1.mp4 -f 735 -o out.mp4 -y
+py -m trimmer input1.mp4 -t 24.5 -r --hw-accel auto
+```
+
+```python
+from trimmer import Trimmer, TrimmerConfig
+cfg = TrimmerConfig(input_path="input1.mp4", frame=735, output_dir="out", force=True)
+result = Trimmer(cfg).run()
+print(result.output_files)
+```
+
+---
+
+## 8. 运行测试
+
+```bash
+py -m pytest
+```
+
+detector 共 85 个测试、trimmer 若干单元/集成测试均通过；
+真实视频用例（`input*.mp4`）缺失时自动跳过，合成视频用例始终运行。
+
+---
+
+## 9. 常见问题
+
+- **端口被占用？** 设置 `WEBUI_PORT` 换一个端口，或先结束占用 8765 的进程再启动。
+- **页面样式/脚本不更新？** 本地开发未开 debug 缓存；已为静态资源加版本号，仍异常时按
+  `Ctrl+F5` 强制刷新。
+- **检测不到目标颜色？** 适当调大「颜色容差」或调低「置信度阈值」以兼容有损编码色偏。
+- **裁剪起点不精确？** 流复制模式下起点会吸附到关键帧；勾选「重编码」可精确到帧。
+- **FFmpeg 未加入 PATH？** 安装 FFmpeg 并加入 PATH，或通过模块的 `ffmpeg_path` /
+  `ffprobe_path` 指定完整路径。

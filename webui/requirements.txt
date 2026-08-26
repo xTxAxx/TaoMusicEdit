@@ -1,0 +1,10 @@
+# TaoMusicEdit Web UI 依赖
+# Flask 已本地化安装到 webui/_vendor（pip install flask --target webui/_vendor），
+# 如需重新安装：py -m pip install -r webui/requirements.txt
+flask>=3.0
+
+# detector 模块依赖（系统已安装）
+opencv-python>=4.8
+numpy>=1.24
+
+# 运行环境要求：FFmpeg（含 ffmpeg / ffprobe，加入 PATH）

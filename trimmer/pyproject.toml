@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-trimmer"
+version = "1.0.0"
+description = "基于 FFmpeg 的视频裁剪工具，裁剪掉指定时间点之前的内容，保持原始编码格式与质量"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["ffmpeg", "video", "trim", "cut", "timestamp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Video",
+]
+
+[project.scripts]
+video-trimmer = "video_trimmer.cli:main"
+
+[tool.setuptools]
+packages = ["video_trimmer"]
