@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaoMusicEdit · 视频检测与裁剪工作台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=21">
+<link rel="stylesheet" href="/static/css/style.css?v=22">
 </head>
 <body>
 
@@ -124,28 +124,17 @@
           <span id="frameInfo" class="muted-text">帧 - / -</span>
         </div>
         <div class="meta-line">
-          <span id="startBadge" class="start-badge"></span>
-          <span id="endBadge" class="end-badge" title=""></span>
           <span id="videoMeta" class="muted-text"></span>
           <span id="timecode">00:00:00.000 / 00:00:00.000</span>
+        </div>
+        <div class="meta-line">
+          <span id="startBadge" class="start-badge"></span>
+          <span id="endBadge" class="end-badge"></span>
         </div>
       </div>
     </section>
 
     <div class="panels">
-      <article class="card panel" id="panelBatch">
-        <div class="card-head">
-          <h2>批处理</h2>
-          <span class="muted-text" id="batchTitle"></span>
-        </div>
-        <div class="progress-wrap" id="batchProgress" hidden>
-          <div class="progress-label" id="batchProgressLabel"></div>
-          <div class="progress-bar"><div class="progress-fill" id="batchProgressFill"></div></div>
-          <button class="btn danger small" id="batchCancel">取消</button>
-        </div>
-        <div class="result" id="batchResult"></div>
-      </article>
-
       <article class="card panel" id="panelDetect">
         <div class="card-head"><h2>颜色检测</h2></div>
         <div class="progress-wrap" id="detectProgress" hidden>
@@ -164,6 +153,19 @@
           <button class="btn danger small" id="trimCancel">取消</button>
         </div>
         <div class="result" id="trimResult"></div>
+      </article>
+
+      <article class="card panel" id="panelBatch">
+        <div class="card-head">
+          <h2>批处理</h2>
+          <span class="muted-text" id="batchTitle"></span>
+        </div>
+        <div class="progress-wrap" id="batchProgress" hidden>
+          <div class="progress-label" id="batchProgressLabel"></div>
+          <div class="progress-bar"><div class="progress-fill" id="batchProgressFill"></div></div>
+          <button class="btn danger small" id="batchCancel">取消</button>
+        </div>
+        <div class="result" id="batchResult"></div>
       </article>
     </div>
 
@@ -213,7 +215,7 @@
 </div>
 
 <script src="/static/js/params.js?v=11"></script>
-<script src="/static/js/player.js?v=8"></script>
+<script src="/static/js/player.js?v=9"></script>
 <script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

@@ -331,9 +331,10 @@ body {
 .start-badge {
   color: var(--warn); font-family: var(--mono);
   border: 1px solid rgba(243,156,18,0.5); border-radius: 6px; padding: 2px 8px;
-  display: none;
+  display: none; cursor: pointer;
 }
 .start-badge.on { display: inline-block; }
+.start-badge.on:hover { background: rgba(243,156,18,0.12); }
 /* 终点徽标：颜色区别于起点（--warn）/ 检测标记（--ok），点击可清除终点 */
 .end-badge {
   color: var(--accent); font-family: var(--mono);

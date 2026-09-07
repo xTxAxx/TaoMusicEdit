@@ -61,6 +61,8 @@ const Player = (function () {
     if (els.btnSetAsEnd) els.btnSetAsEnd.addEventListener("click", setAsEnd);
     // 点击终点徽标 = 清除终点（恢复「保留到片尾」的原有行为）
     if (els.endBadge) els.endBadge.addEventListener("click", clearEnd);
+    // 点击起点徽标 = 清除当前设点，回退到算法检测到的起点（无检测起点则留空）
+    if (els.startBadge) els.startBadge.addEventListener("click", clearStart);
 
     // 视频事件
     els.video.addEventListener("loadedmetadata", () => {
@@ -294,6 +296,32 @@ const Player = (function () {
     render();
   }
 
+  // ---------------- 清除起点（回退到检测起点） ----------------
+  // 点击起点徽标：若存在算法检测到的起点（detectedMark），则裁剪起点恢复为检测帧；
+  // 否则清空裁剪起点参数（无检测起点的场景）。
+  function clearStart() {
+    if (detectedMark) {
+      // 回退到检测起点后，起点与「自动关联的检测默认」一致，不再保留自定义起点标记
+      startMark = null;
+      const modeEl = document.getElementById("param-start_mode");
+      const mode = (modeEl && modeEl.value) || "frame";
+      if (mode === "timestamp") {
+        setParam("start_value", detectedMark.time.toFixed(6));
+      } else {
+        setParam("start_value", detectedMark.frameOneBased);
+      }
+      window.toast && toast("success", "已回退到检测起点：第 " + detectedMark.frameOneBased + " 帧 @ " + formatTime(detectedMark.time));
+    } else {
+      startMark = null;
+      setParam("start_mode", "frame");
+      setParam("start_value", "");
+      window.toast && toast("info", "无检测起点，已清空裁剪起点");
+    }
+    updateStartBadge();
+    updateHud();
+    render();
+  }
+
   // ---------------- 检测标记 ----------------
   function setDetected(data, videoPath) {
     if (!data || !data.detected) {
@@ -373,7 +401,6 @@ const Player = (function () {
       ctx.drawImage(exactImg, rect.x, rect.y, rect.w, rect.h);
     }
     drawMarkers(ctx, rect);
-    drawEndTag(ctx, rect);
     drawScrubber();
   }
 
@@ -410,27 +437,6 @@ const Player = (function () {
       ctx.fillText("conf=" + m.confidence.toFixed(3), x + 18, y - 14);
       ctx.restore();
     });
-  }
-
-  // ---------------- 终点画面标注（区别于起点 / 检测标记的颜色） ----------------
-  function drawEndTag(ctx, rect) {
-    if (!endMark) return;
-    const text = "终点 第 " + endMark.frameOneBased + " 帧 @ " + formatTime(endMark.time);
-    ctx.save();
-    ctx.font = '12px "Segoe UI", "Microsoft YaHei", sans-serif';
-    const w = ctx.measureText(text).width + 16;
-    const h = 22;
-    const x = rect.x + rect.w - w - 10;
-    const y = rect.y + 10;
-    ctx.fillStyle = "rgba(20,26,40,0.78)";
-    ctx.strokeStyle = "rgba(79,140,255,0.85)";
-    ctx.lineWidth = 1;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = "#4f8cff";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, x + 8, y + h / 2 + 0.5);
-    ctx.restore();
   }
 
   // ---------------- 进度条（自定义 + 标记指示器） ----------------
@@ -499,9 +505,12 @@ const Player = (function () {
   function updateStartBadge() {
     if (els.startBadge) {
       els.startBadge.textContent = startMark
-        ? "起点：第 " + startMark.frameOneBased + " 帧 @ " + formatTime(startMark.time)
+        ? "✕ 起点：第 " + startMark.frameOneBased + " 帧 @ " + formatTime(startMark.time)
         : "";
       els.startBadge.classList.toggle("on", !!startMark);
+      els.startBadge.title = startMark
+        ? (detectedMark ? "点击清除起点（回退到检测起点：第 " + detectedMark.frameOneBased + " 帧 @ " + formatTime(detectedMark.time) + "）" : "点击清除起点")
+        : "";
     }
   }
 
