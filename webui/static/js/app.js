@@ -5,6 +5,7 @@ const state = {
   workspace: "",
   outputDir: "",
   currentVideo: null,      // 当前选中视频绝对路径
+  video: null,             // 当前视频元信息（duration/fps/nb_frames），供参数范围校验
   detectResult: null,
   jobs: { detect: null, trim: null, batch: null },  // 正在运行的任务 job_id
   sel: new Set(),          // 批处理选择的视频路径集合
@@ -213,9 +214,11 @@ async function selectVideo(vpath, rowEl) {
   setStatus("正在加载视频…");
   try {
     await Player.loadVideo(vpath);
+    state.video = Player.getInfo();  // 供 validateTrim 做范围校验（时长/帧率/总帧数）
     applyBatchResultForVideo(vpath);
     setStatus("视频已加载，可开始检测或裁剪");
   } catch (e) {
+    state.video = null;
     setStatus("视频加载失败");
   }
   updateActions();
@@ -541,7 +544,16 @@ async function runTrim() {
       }),
     });
     const data = await res.json();
-    if (!data.ok) { toast("error", data.message || "启动裁剪失败"); setBusy("trim", false); return; }
+    if (!data.ok) {
+      toast("error", data.message || "启动裁剪失败");
+      // 终点参数校验失败（后端返回 400）时，在终点行内同步提示
+      if (data.message && data.message.indexOf("终点") !== -1) {
+        const endRow = rowOf("end_value");
+        if (endRow) showRowError(endRow, data.message);
+      }
+      setBusy("trim", false);
+      return;
+    }
     state.jobs.trim = data.job_id;
     openSSE(data.job_id, "trim");
   } catch (e) {
@@ -616,7 +628,8 @@ async function runBatchTrim() {
   if (!files.length) { toast("warn", "请先在工作区选择视频文件（Ctrl 单选 / Shift 区选 / 全选）"); return; }
   if (state.jobs.batch) { toast("warn", "批处理任务正在运行中，请稍候"); return; }
   if (!state.outputDir) { toast("warn", "请先设置输出目录"); return; }
-  const v = validateTrim(state);
+  // 批量裁剪不使用终点（以检测结果为起点、保留到片尾），跳过终点校验
+  const v = validateTrim(state, false);
   if (v.errors.length) {
     v.errors.forEach((m) => toast("error", m));
     return;
@@ -927,10 +940,17 @@ function onTrimDone(data) {
 function renderTrimResult(data) {
   const box = document.getElementById("trimResult");
   const files = (data.output_files || []).map((f) => "<li>" + esc(f) + "</li>").join("");
+  let rangeLines = "<li>起点：" + (data.frame ? "#" + data.frame + " 帧" : (data.timestamp || 0).toFixed(3) + "s") + "</li>";
+  if (data.end_timestamp != null) {
+    rangeLines += "<li>终点：" +
+      (data.end_frame ? "#" + data.end_frame + " 帧（" + data.end_timestamp.toFixed(3) + "s）"
+                      : data.end_timestamp.toFixed(3) + "s") +
+      "</li>";
+  }
   box.innerHTML =
     '<div class="result-msg ok">裁剪完成</div>' +
     "<ul class='kv'><li>处理方式：<b>" + esc(data.message || "") + "</b></li>" +
-    "<li>起点：" + (data.frame ? "#" + data.frame + " 帧" : (data.timestamp || 0).toFixed(3) + "s") + "</li>" +
+    rangeLines +
     "<li>保留时长：<b>" + data.cut_duration.toFixed(3) + " s</b></li></ul>" +
     "<div class='out-title'>输出文件：</div><ul class='points'>" + files + "</ul>";
 }
@@ -952,13 +972,36 @@ function updateActions() {
   const btnDetect = document.getElementById("btnDetect");
   const btnTrim = document.getElementById("btnTrim");
   const btnSetAsStart = document.getElementById("btnSetAsStart");
+  const btnSetAsEnd = document.getElementById("btnSetAsEnd");
   const btnBatchDetect = document.getElementById("btnBatchDetect");
   const btnBatchTrim = document.getElementById("btnBatchTrim");
   if (btnDetect) btnDetect.disabled = !hasVideo || !!state.jobs.detect;
   if (btnTrim) btnTrim.disabled = !hasVideo || !!state.jobs.trim || !state.outputDir;
   if (btnSetAsStart) btnSetAsStart.disabled = !hasVideo;
+  if (btnSetAsEnd) btnSetAsEnd.disabled = !hasVideo;
   if (btnBatchDetect) btnBatchDetect.disabled = !hasSel || batchBusy;
   if (btnBatchTrim) btnBatchTrim.disabled = !hasSel || batchBusy || !state.outputDir;
+}
+
+// ---------------- 终点参数联动（区间裁剪） ----------------
+// 终点方式为「无（到片尾）」时禁用终点输入框，并清除终点值与终点标记
+// （选择「无」即「清除终点」，退化为原有片头裁剪行为；不触碰起点参数）。
+function syncEndControls() {
+  const modeEl = document.getElementById("param-end_mode");
+  const valEl = document.getElementById("param-end_value");
+  if (!modeEl || !valEl) return;
+  const none = modeEl.value === "none";
+  valEl.disabled = none;
+  if (none) {
+    setParam("end_value", "");
+    Player.clearEndMark();
+  }
+}
+
+function initTrimEndControls() {
+  const modeEl = document.getElementById("param-end_mode");
+  if (modeEl) modeEl.addEventListener("change", syncEndControls);
+  syncEndControls();
 }
 
 // ---------------- 设置自动保存（配置文件持久化） ----------------
@@ -970,10 +1013,13 @@ function scheduleSave() {
 }
 
 async function saveSettings() {
-  // 裁剪起点（start_mode / start_value）因视频而异，不写入配置文件
+  // 裁剪起点 / 终点（start_mode / start_value / end_mode / end_value）
+  // 因视频而异，不写入配置文件
   const trimmer = collectParams(TRIM_PARAMS);
   delete trimmer.start_mode;
   delete trimmer.start_value;
+  delete trimmer.end_mode;
+  delete trimmer.end_value;
   const payload = {
     workspace: state.workspace || "",
     output_dir: state.outputDir || "",
@@ -999,6 +1045,7 @@ async function resetSettings() {
     const s = data.settings || {};
     buildParamsForm(document.getElementById("detectParams"), DETECTOR_PARAMS, s.detector);
     buildParamsForm(document.getElementById("trimParams"), TRIM_PARAMS, s.trimmer);
+    initTrimEndControls();  // 表单重建后重新绑定终点方式联动（终点默认「无」）
     await refreshWorkspace();
     await refreshOutput();
     updateActions();
@@ -1079,13 +1126,17 @@ async function initApp() {
   // 裁剪起点随视频而异，不随配置恢复：启动时一律默认留空
   setParam("start_mode", "frame");
   setParam("start_value", "");
+  // 终点同样因视频而异不持久化：启动时默认「无（到片尾）」= 原有行为
+  setParam("end_mode", "none");
+  setParam("end_value", "");
+  initTrimEndControls();
   // 恢复持久化检测缓存：刷新 / 重启后选视频即可自动匹配上次检测结果
   await hydrateDetectCache();
   initCacheSettingsUI(saved);
   wireUI();
-  window.__onTrimParamFilled = () => {
+  window.__onTrimParamFilled = (key) => {
     document.getElementById("panelTrim").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    const row = rowOf("start_value");
+    const row = rowOf(key || "start_value");
     if (row) {
       row.style.animation = "flash 1s ease 2";
       setTimeout(() => { row.style.animation = ""; }, 2200);

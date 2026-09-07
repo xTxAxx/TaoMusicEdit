@@ -15,9 +15,9 @@ import re
 import shutil
 import subprocess
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
-from trimmer.core.errors import FFmpegExecutionError, FFmpegNotFoundError
+from trimmer.core.errors import FFmpegExecutionError, FFmpegNotFoundError, TrimmerError
 
 #: ffmpeg / ffprobe 可执行文件名（可通过环境变量 TRIM_FFMPEG / TRIM_FFPROBE 覆盖）
 FFMPEG_EXECUTABLE = "ffmpeg"
@@ -38,6 +38,11 @@ VENDOR_ENCODER_PREFIX = {
 
 _encoders_cache: Optional[set] = None
 _vendor_cache: Optional[str] = None
+_version_cache: Optional[Tuple[int, int]] = None
+_version_probed: bool = False
+
+#: 输入侧 ``-to`` 选项所需的最低 FFmpeg 版本（4.4 起支持）
+INPUT_SIDE_TO_MIN_VERSION = (4, 4)
 
 
 def _run_capture(cmd: List[str]) -> str:
@@ -90,6 +95,41 @@ def detect_gpu_vendor() -> Optional[str]:
     if _vendor_cache is None:
         _vendor_cache = _detect_gpu_vendor_impl()
     return _vendor_cache
+
+
+def _detect_ffmpeg_version_impl() -> Optional[Tuple[int, int]]:
+    """解析 ``ffmpeg -version`` 输出中的 (主版本, 次版本)；失败返回 None。
+
+    兼容 ``4.4``、``n4.4.2``（部分发行版前缀）、``7.0.1-xxx`` 等版本字符串；
+    无法解析（如日期式 git 构建）时返回 None，由调用方保守回退。
+    """
+    try:
+        ffmpeg = find_ffmpeg()
+    except TrimmerError:
+        return None
+    text = _run_capture([ffmpeg, "-version"])
+    match = re.search(r"ffmpeg version \D?(\d+)\.(\d+)", text)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def get_ffmpeg_version() -> Optional[Tuple[int, int]]:
+    """返回 ffmpeg 版本 ``(主版本, 次版本)``；无法确定时返回 None。结果进程内缓存。"""
+    global _version_cache, _version_probed
+    if not _version_probed:
+        _version_cache = _detect_ffmpeg_version_impl()
+        _version_probed = True
+    return _version_cache
+
+
+def supports_input_side_to() -> bool:
+    """判断当前 ffmpeg 是否支持输入侧 ``-to`` 选项（>= 4.4）。
+
+    版本未知时保守返回 False，由调用方回退输出侧 ``-t``（全版本可用）。
+    """
+    version = get_ffmpeg_version()
+    return version is not None and version >= INPUT_SIDE_TO_MIN_VERSION
 
 
 def resolve_executable(default_name: str, env_key: str) -> str:

@@ -134,3 +134,76 @@ class TestIntegration:
         # 输出路径指向输入文件本身 → 拒绝覆盖原文件
         with pytest.raises(OverwriteInputError):
             Trimmer(TrimmerConfig(input_path=sample, timestamp=1.0, output=sample)).run()
+
+
+class TestIntervalIntegration:
+    """区间裁剪集成测试（A2 / A3 / A4 验收）。"""
+
+    def test_reencode_duration_exact(self, sample):
+        # A2：重编码区间 [2s, 6s)，输出时长 = end - start（误差 ≤ 1 帧级别）
+        result = Trimmer(TrimmerConfig(input_path=sample, timestamp=2.0,
+                                       end_timestamp=6.0, reencode=True, force=True)).run()
+        out = result.output_files[0]
+        assert os.path.exists(out)
+        assert _probe_duration(out) == pytest.approx(4.0, abs=1 / 30.0 + 0.02)
+        assert result.cut_duration == pytest.approx(4.0)
+        assert result.end_timestamp == pytest.approx(6.0)
+        assert result.end_frame is None
+
+    def test_stream_copy_interval(self, sample):
+        # A3：流复制区间 [2s, 8s)——起点吸附关键帧（每秒一个），终点包级截断
+        result = Trimmer(TrimmerConfig(input_path=sample, timestamp=2.0,
+                                       end_timestamp=8.0, force=True)).run()
+        out = result.output_files[0]
+        assert os.path.exists(out)
+        dur = _probe_duration(out)
+        assert dur > 0
+        assert dur == pytest.approx(6.0, abs=0.5)
+
+    def test_mixed_start_frame_end_timestamp(self, sample):
+        # 起点帧序号 × 终点时间戳自由组合：第 91 帧（3s）→ 7s
+        result = Trimmer(TrimmerConfig(input_path=sample, frame=91,
+                                       end_timestamp=7.0, reencode=True, force=True)).run()
+        assert _probe_duration(result.output_files[0]) == pytest.approx(4.0, abs=1 / 30.0 + 0.02)
+        assert result.frame == 91
+        assert result.end_timestamp == pytest.approx(7.0)
+
+    def test_end_frame_mode(self, sample):
+        # 终点帧序号：[第 61 帧, 第 181 帧) = [2s, 6s)
+        result = Trimmer(TrimmerConfig(input_path=sample, frame=61, end_frame=181,
+                                       reencode=True, force=True)).run()
+        assert _probe_duration(result.output_files[0]) == pytest.approx(4.0, abs=1 / 30.0 + 0.02)
+        assert result.end_frame == 181
+
+    def test_error_end_not_after_start(self, sample):
+        # A4：终点 ≤ 起点 → VALIDATION_ERROR
+        with pytest.raises(TrimmerError):
+            Trimmer(TrimmerConfig(input_path=sample, timestamp=5.0,
+                                  end_timestamp=5.0, force=True)).run()
+        with pytest.raises(TrimmerError):
+            Trimmer(TrimmerConfig(input_path=sample, timestamp=5.0,
+                                  end_timestamp=4.0, force=True)).run()
+
+    def test_error_end_exceeds_duration(self, sample):
+        # A4：终点超范围 → VALIDATION_ERROR
+        with pytest.raises(TrimmerError):
+            Trimmer(TrimmerConfig(input_path=sample, timestamp=1.0,
+                                  end_timestamp=999.0, force=True)).run()
+
+    def test_error_end_exceeds_total_frames(self, sample):
+        with pytest.raises(TrimmerError):
+            Trimmer(TrimmerConfig(input_path=sample, frame=30,
+                                  end_frame=100000, force=True)).run()
+
+    def test_error_end_both_modes(self, sample):
+        # A4：end_timestamp 与 end_frame 冲突 → VALIDATION_ERROR
+        with pytest.raises(TrimmerError):
+            Trimmer(TrimmerConfig(input_path=sample, timestamp=1.0,
+                                  end_timestamp=5.0, end_frame=150, force=True)).run()
+
+    def test_end_at_duration_boundary(self, sample):
+        # 终点 = 视频时长（10s）：等价于保留 [2s, 片尾]
+        result = Trimmer(TrimmerConfig(input_path=sample, timestamp=2.0,
+                                       end_timestamp=10.0, force=True)).run()
+        out = result.output_files[0]
+        assert _probe_duration(out) == pytest.approx(8.0, abs=0.5)

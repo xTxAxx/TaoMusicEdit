@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaoMusicEdit · 视频检测与裁剪工作台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=20">
+<link rel="stylesheet" href="/static/css/style.css?v=21">
 </head>
 <body>
 
@@ -118,12 +118,14 @@
           <button class="ctl" id="btnDetect" title="执行颜色检测">检测</button>
           <button class="ctl" id="btnTrim" title="按裁剪起点执行裁剪">裁剪</button>
           <button class="ctl" id="btnSetAsStart" title="将当前播放帧设为裁剪起点（按起点方式自动取帧序号或时间戳）">设为起点</button>
+          <button class="ctl" id="btnSetAsEnd" title="将当前播放帧设为裁剪终点（按终点方式自动取帧序号或时间戳；终点方式为「无」时沿用起点方式）">设为终点</button>
           <label class="chk"><input type="checkbox" id="markerToggle" checked> 显示检测标记</label>
           <span class="spacer"></span>
           <span id="frameInfo" class="muted-text">帧 - / -</span>
         </div>
         <div class="meta-line">
           <span id="startBadge" class="start-badge"></span>
+          <span id="endBadge" class="end-badge" title=""></span>
           <span id="videoMeta" class="muted-text"></span>
           <span id="timecode">00:00:00.000 / 00:00:00.000</span>
         </div>
@@ -210,8 +212,8 @@
   </div>
 </div>
 
-<script src="/static/js/params.js?v=10"></script>
-<script src="/static/js/player.js?v=7"></script>
-<script src="/static/js/app.js?v=25"></script>
+<script src="/static/js/params.js?v=11"></script>
+<script src="/static/js/player.js?v=8"></script>
+<script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

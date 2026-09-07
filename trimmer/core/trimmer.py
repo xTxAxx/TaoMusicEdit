@@ -18,6 +18,7 @@ from trimmer.core.errors import (
     NoStreamError,
     OutputExistsError,
     OverwriteInputError,
+    TrimmerError,
     ValidationError,
 )
 from trimmer.core.ffmpeg import (
@@ -25,6 +26,7 @@ from trimmer.core.ffmpeg import (
     detect_available_encoders,
     detect_gpu_encoder,
     detect_gpu_vendor,
+    supports_input_side_to,
 )
 from trimmer.core.probe import (
     MediaInfo,
@@ -36,6 +38,8 @@ from trimmer.core.probe import (
 from trimmer.utils.logger import get_logger
 from trimmer.utils.validation import (
     validate_cut_params,
+    validate_end_after_start,
+    validate_end_params,
     validate_frame,
     validate_input_path,
     validate_timestamp,
@@ -58,11 +62,19 @@ class OutputMode(str, Enum):
 
 @dataclass
 class TrimmerConfig:
-    """裁剪配置参数。"""
+    """裁剪配置参数。
+
+    起点（``timestamp`` / ``frame`` 二选一）必填；终点（``end_timestamp`` /
+    ``end_frame`` 二选一）可选，缺省时保留到片尾（与原有行为一致）。
+    起点与终点的方式可不同（如起点用帧序号、终点用时间戳），内部统一
+    换算为时间戳执行。
+    """
 
     input_path: str
     timestamp: Optional[float] = None      #: 裁剪起始时间戳（秒），与 frame 二选一
     frame: Optional[int] = None            #: 裁剪起始帧序号（>=1），与 timestamp 二选一
+    end_timestamp: Optional[float] = None  #: 裁剪终点时间戳（秒），与 end_frame 二选一；缺省 = 保留到片尾
+    end_frame: Optional[int] = None        #: 裁剪终点帧序号（>=1），与 end_timestamp 二选一；缺省 = 保留到片尾
     output: Optional[str] = None           #: 自定义输出路径（可选）
     output_dir: Optional[str] = None       #: 自定义输出目录（可选）
     suffix: str = "_trim"                  #: 默认输出文件名后缀
@@ -90,6 +102,8 @@ class TrimmerResult:
     video_encoder: Optional[str] = None
     audio_encoder: Optional[str] = None
     message: str = ""
+    end_timestamp: Optional[float] = None  #: 裁剪终点时间戳（秒）；None = 保留到片尾
+    end_frame: Optional[int] = None        #: 裁剪终点帧序号（帧模式）
 
 
 def _codec_family(encoder: str) -> Optional[str]:
@@ -114,16 +128,30 @@ def build_command(
     include_video: bool,
     include_audio: bool,
     hwaccel_args: Optional[List[str]] = None,
+    end_time: Optional[float] = None,
 ) -> List[str]:
     """构建单条 ffmpeg 命令的参数列表（不含可执行文件）。
 
-    该函数为纯函数，便于单元测试。保留从 ``start_time`` 到视频末尾的内容
-    （裁剪掉开头的部分）。重编码时会自动匹配原视频的编码器、码率、帧率、
-    像素格式，以及音频编码器、码率、采样率、声道数。
+    该函数为纯函数，便于单元测试。``end_time`` 为 None 时保留从
+    ``start_time`` 到视频末尾的内容（裁剪掉开头部分，原有行为）；
+    提供时保留 ``[start_time, end_time)`` 区间（区间裁剪）：
+
+    - FFmpeg >= 4.4：``-to`` 与 ``-ss`` 同为输入侧选项（置于 ``-i`` 之前），
+      两者均在输入时间轴上取绝对位置，起点吸附不影响终点位置；
+    - 旧版 FFmpeg 回退：输出侧 ``-t <end - start>``（时长随起点吸附整体前移）。
+
+    重编码时会自动匹配原视频的编码器、码率、帧率、像素格式，
+    以及音频编码器、码率、采样率、声道数。
     """
     args: List[str] = ["-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]
     args += list(hwaccel_args or [])
-    args += ["-ss", f"{start_time:.9f}", "-i", input_path]
+    args += ["-ss", f"{start_time:.9f}"]
+    use_input_to = end_time is not None and supports_input_side_to()
+    if end_time is not None and use_input_to:
+        args += ["-to", f"{end_time:.9f}"]
+    args += ["-i", input_path]
+    if end_time is not None and not use_input_to:
+        args += ["-t", f"{end_time - start_time:.9f}"]
 
     if include_video:
         args += ["-map", "0:v:0?"]
@@ -171,6 +199,10 @@ class Trimmer:
 
         config = TrimmerConfig(input_path="input.mp4", timestamp=24.9)
         result = Trimmer(config).run()
+
+        # 区间裁剪：保留 [24.9s, 3600s)
+        config = TrimmerConfig(input_path="input.mp4", timestamp=24.9, end_timestamp=3600.0)
+        result = Trimmer(config).run()
     """
 
     def __init__(self, config: TrimmerConfig):
@@ -178,9 +210,11 @@ class Trimmer:
         self.media: Optional[MediaInfo] = None
         self.input_path: Optional[str] = None
         self.start_time: float = 0.0
+        self.end_time: Optional[float] = None  #: 裁剪终点时间戳（秒）；None = 保留到片尾
         self.out_duration: Optional[float] = None  #: 输出（保留）时长，未知时为 None
         self.timestamp: float = 0.0
         self.frame: Optional[int] = None
+        self.end_frame: Optional[int] = None
         self.output_paths: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
@@ -202,7 +236,23 @@ class Trimmer:
             self.frame = value
             self.timestamp = self.start_time
 
-        if self.media.duration:
+        # 终点（可选）：时间戳 / 帧序号二选一，换算后须大于起点
+        end_mode, end_value = validate_end_params(cfg.end_timestamp, cfg.end_frame)
+        if end_mode == "timestamp":
+            self.end_time = validate_timestamp(end_value, self.media, label="终点时间戳")
+            self.end_frame = None
+        elif end_mode == "frame":
+            self.end_time = validate_frame(end_value, self.media, label="终点帧序号")
+            self.end_frame = end_value
+        else:
+            self.end_time = None
+            self.end_frame = None
+        if self.end_time is not None:
+            validate_end_after_start(self.end_time, self.start_time)
+
+        if self.end_time is not None:
+            self.out_duration = self.end_time - self.start_time
+        elif self.media.duration:
             self.out_duration = max(0.0, self.media.duration - self.start_time)
 
         self._check_streams()
@@ -339,7 +389,7 @@ class Trimmer:
                 self.config, self.media, self.input_path, self.start_time, out,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=include_video, include_audio=include_audio,
-                hwaccel_args=hwaccel_args), label))
+                hwaccel_args=hwaccel_args, end_time=self.end_time), label))
 
         elif mode == OutputMode.AUDIO_ONLY:
             out = self.output_paths["main"]
@@ -347,7 +397,7 @@ class Trimmer:
                 self.config, self.media, self.input_path, self.start_time, out,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=False, include_audio=True,
-                hwaccel_args=[]), "纯音频"))
+                hwaccel_args=[], end_time=self.end_time), "纯音频"))
 
         else:  # SPLIT
             vout = self.output_paths["video"]
@@ -356,12 +406,12 @@ class Trimmer:
                 self.config, self.media, self.input_path, self.start_time, vout,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=True, include_audio=False,
-                hwaccel_args=hwaccel_args), "分离视频"))
+                hwaccel_args=hwaccel_args, end_time=self.end_time), "分离视频"))
             plans.append((aout, build_command(
                 self.config, self.media, self.input_path, self.start_time, aout,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=False, include_audio=True,
-                hwaccel_args=[]), "分离音频"))
+                hwaccel_args=[], end_time=self.end_time), "分离音频"))
 
         return plans
 
@@ -379,7 +429,30 @@ class Trimmer:
         runner.run(args, total_duration=self.out_duration, progress_cb=progress_cb,
                    cancel_event=cancel_event)
         if not os.path.exists(out_path):
+            # 流复制区间模式下双端吸附关键帧可能导不出任何内容 → 明确报错
+            if self.end_time is not None and not self.config.reencode:
+                raise FFmpegExecutionError(self._empty_interval_message())
             logger.warning("未检测到输出文件: %s", out_path)
+            return
+        if self.end_time is not None and not self.config.reencode:
+            self._check_interval_output(out_path)
+
+    def _empty_interval_message(self) -> str:
+        return (f"流复制模式下区间 [{self.start_time:.3f}s, {self.end_time:.3f}s) "
+                "双端吸附关键帧后无可输出内容，请扩大区间或使用重编码获得精确边界。")
+
+    def _check_interval_output(self, out_path: str) -> None:
+        """流复制区间模式：校验输出包含实际内容。
+
+        流复制时起点与终点均受关键帧 / 包边界吸附影响，极端情况下可能
+        产出空文件；此时明确报错而非静默输出空文件（见设计文档 §5.2）。
+        """
+        try:
+            out_duration = probe(out_path).duration or 0.0
+        except TrimmerError:
+            out_duration = 0.0
+        if out_duration <= 0.0:
+            raise FFmpegExecutionError(self._empty_interval_message())
 
     def _build_message(self, gpu: Optional[str]) -> str:
         if self.config.reencode:
@@ -438,4 +511,6 @@ class Trimmer:
             video_encoder=video_encoder if self.config.reencode else None,
             audio_encoder=audio_encoder if self.config.reencode else None,
             message=self._build_message(gpu),
+            end_timestamp=self.end_time,
+            end_frame=self.end_frame,
         )

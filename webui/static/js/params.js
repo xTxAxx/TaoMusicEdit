@@ -41,6 +41,13 @@ const TRIM_PARAMS = [
   { key: "start_value", label: "裁剪起点", type: "number", default: "",
     required: true, step: 0.001, placeholder: "输入帧序号或时间戳…",
     desc: "必填。可先执行 Detect 或捕获当前帧后点击「设为起点」自动填入" },
+  { key: "end_mode", label: "终点方式", type: "select", default: "none",
+    options: [{ v: "none", l: "无（到片尾）" }, { v: "frame", l: "帧序号 (-F)" },
+              { v: "timestamp", l: "时间戳 (-T)" }],
+    desc: "裁剪终点的表示方式；「无」= 保留到片尾（与原有行为一致），选择「无」即清除终点" },
+  { key: "end_value", label: "裁剪终点", type: "number", default: "",
+    step: 0.001, placeholder: "输入帧序号或时间戳…",
+    desc: "可选。播放定位后点击「设为终点」可捕获当前帧自动填入；须大于起点" },
   { key: "suffix", label: "输出文件名后缀", type: "text", default: "_trim",
     desc: "如 input.mp4 → input_trim.mp4" },
   { key: "output_mode", label: "输出模式", type: "select", default: "full",
@@ -163,8 +170,10 @@ function rowOf(key) {
   return el ? el.closest(".param-row") : null;
 }
 
-// 校验 Trim 参数：起点必填、数值/范围正确、与视频信息比对
-function validateTrim(state) {
+// 校验 Trim 参数：起点必填、数值/范围正确、与视频信息比对；
+// 终点（可选）方式/数值匹配、范围正确且须大于起点。
+// checkEnd = false 时跳过终点校验（批量裁剪不使用终点）。
+function validateTrim(state, checkEnd = true) {
   const p = collectParams(TRIM_PARAMS);
   const errors = [];
   const mode = p.start_mode;
@@ -198,13 +207,70 @@ function validateTrim(state) {
       }
     }
   }
+
+  if (checkEnd) {
+    const endRow = rowOf("end_value");
+    const endMode = String(p.end_mode || "none");
+    const endRaw = String(p.end_value == null ? "" : p.end_value).trim();
+    let endOk = false;   // 终点数值本身合法（可参与与起点的比较）
+    let endNum = NaN;
+    if (endMode === "none") {
+      if (endRaw !== "") {
+        errors.push("终点方式为「无（到片尾）」时不应填写终点值，请清空裁剪终点");
+        if (endRow) showRowError(endRow, "终点方式为「无」时请清空终点值");
+      }
+    } else if (endRaw === "") {
+      errors.push("已选择终点方式，请填写裁剪终点（或改回「无（到片尾）」）");
+      if (endRow) showRowError(endRow, "请填写终点或改回「无」");
+    } else {
+      endNum = Number(endRaw);
+      if (!isFinite(endNum)) {
+        errors.push("裁剪终点必须是数字");
+        if (endRow) showRowError(endRow, "必须是数字");
+      } else if (endMode === "frame") {
+        if (!Number.isInteger(endNum) || endNum < 1) {
+          errors.push("终点帧序号必须是不小于 1 的整数");
+          if (endRow) showRowError(endRow, "帧序号须为 ≥1 的整数");
+        } else if (state.video && state.video.nb_frames &&
+                   endNum > state.video.nb_frames) {
+          errors.push(`终点帧序号 ${endNum} 超出视频总帧数 ${state.video.nb_frames}`);
+          if (endRow) showRowError(endRow, `超出总帧数 ${state.video.nb_frames}`);
+        } else {
+          endOk = true;
+        }
+      } else {
+        if (endNum <= 0) {
+          errors.push("终点时间戳必须大于 0");
+          if (endRow) showRowError(endRow, "时间戳须大于 0");
+        } else if (state.video && endNum > state.video.duration) {
+          errors.push(`终点时间戳 ${endNum}s 超出视频时长 ${state.video.duration.toFixed(3)}s`);
+          if (endRow) showRowError(endRow, `超出时长 ${state.video.duration.toFixed(3)}s`);
+        } else {
+          endOk = true;
+        }
+      }
+    }
+    // 终点须大于起点（换算为秒比较；起点未填 / 非法时由起点校验与后端处理）
+    if (endOk && raw !== "") {
+      const sNum = Number(raw);
+      if (isFinite(sNum)) {
+        const fps = (state.video && state.video.fps) || 30;
+        const toSec = (m, v) => (m === "timestamp" ? v : (v - 1) / fps);
+        if (toSec(endMode, endNum) <= toSec(String(mode || "frame"), sNum)) {
+          errors.push("终点必须大于起点");
+          if (endRow) showRowError(endRow, "终点须大于起点");
+        }
+      }
+    }
+  }
+
   if (state.video && Number(p.reencode)) {
-    // 流复制模式下起点受关键帧吸附影响，仅在重编码时提示精确性
+    // 流复制模式下起终点受关键帧吸附影响，仅在重编码时提示精确性
     const row = rowOf("start_value");
     if (row && !row.classList.contains("error")) {
       const tip = document.createElement("div");
       tip.className = "param-tip";
-      tip.textContent = "流复制模式下起点会吸附到关键帧；勾选「重编码」可精确到帧。";
+      tip.textContent = "流复制模式下起点/终点会吸附到关键帧；勾选「重编码」可精确到帧。";
       if (!row.querySelector(".param-tip")) row.appendChild(tip);
     }
   }

@@ -48,6 +48,23 @@ class TestParse:
         with pytest.raises(SystemExit):
             parse("a.mp4", "-t", "1.0", "-f", "10")
 
+    def test_end_options(self):
+        args = parse("a.mp4", "-t", "24.9", "-T", "3600")
+        assert args.end_timestamp == 3600.0
+        assert args.end_frame is None
+        args = parse("a.mp4", "-f", "735", "-F", "108000")
+        assert args.end_frame == 108000
+        assert args.end_timestamp is None
+
+    def test_end_options_exclusive(self):
+        with pytest.raises(SystemExit):
+            parse("a.mp4", "-t", "1.0", "-T", "10", "-F", "300")
+
+    def test_end_defaults(self):
+        args = parse("a.mp4", "-t", "1.0")
+        assert args.end_timestamp is None
+        assert args.end_frame is None
+
     def test_output_modes_exclusive(self):
         with pytest.raises(SystemExit):
             parse("a.mp4", "-t", "1.0", "--audio-only", "--split")
@@ -63,6 +80,7 @@ class TestParse:
         out = capsys.readouterr().out
         assert "--timestamp" in out and "--frame" in out and "--reencode" in out
         assert "--hw-accel" in out and "--split" in out
+        assert "--end-timestamp" in out and "--end-frame" in out
 
 
 class TestBuildConfig:
@@ -93,3 +111,16 @@ class TestBuildConfig:
         assert cfg.suffix == "_trim"
         cfg = build_config(parse("a.mp4", "-f", "60"))
         assert cfg.frame == 60
+
+    def test_end_fields_passthrough(self):
+        cfg = build_config(parse("a.mp4", "-t", "24.9", "-T", "3600"))
+        assert cfg.end_timestamp == 3600.0
+        assert cfg.end_frame is None
+        cfg = build_config(parse("a.mp4", "-f", "735", "-F", "108000"))
+        assert cfg.end_frame == 108000
+        assert cfg.end_timestamp is None
+
+    def test_end_fields_default_none(self):
+        cfg = build_config(parse("a.mp4", "-t", "24.9"))
+        assert cfg.end_timestamp is None
+        assert cfg.end_frame is None

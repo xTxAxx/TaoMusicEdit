@@ -17,6 +17,7 @@ const Player = (function () {
   let stepToken = 0;
   let startMark = null;       // 已设为起点的帧位置 { time, frameOneBased }
   let detectedMark = null;    // { time, frameOneBased }
+  let endMark = null;         // 已设为终点的帧位置 { time, frameOneBased }（区间裁剪）
   let scrubbing = false;
   let inited = false;
 
@@ -39,9 +40,11 @@ const Player = (function () {
     els.videoMeta = document.getElementById("videoMeta");
     els.markerToggle = document.getElementById("markerToggle");
     els.btnSetAsStart = document.getElementById("btnSetAsStart");
+    els.btnSetAsEnd = document.getElementById("btnSetAsEnd");
     els.playerLoading = document.getElementById("playerLoading");
     els.playerHud = document.getElementById("playerHud");
     els.startBadge = document.getElementById("startBadge");
+    els.endBadge = document.getElementById("endBadge");
 
     els.btnPlay.addEventListener("click", togglePlay);
     els.btnPrev.addEventListener("click", () => stepFrames(-1));
@@ -55,6 +58,9 @@ const Player = (function () {
       render();
     });
     els.btnSetAsStart.addEventListener("click", setAsStart);
+    if (els.btnSetAsEnd) els.btnSetAsEnd.addEventListener("click", setAsEnd);
+    // 点击终点徽标 = 清除终点（恢复「保留到片尾」的原有行为）
+    if (els.endBadge) els.endBadge.addEventListener("click", clearEnd);
 
     // 视频事件
     els.video.addEventListener("loadedmetadata", () => {
@@ -97,6 +103,7 @@ const Player = (function () {
     markers = [];
     startMark = null;
     detectedMark = null;
+    endMark = null;
     exactImg = null;
     els.playerLoading.hidden = false;
     return fetch("/api/probe?path=" + encodeURIComponent(vpath))
@@ -111,6 +118,7 @@ const Player = (function () {
         updateMeta();
         updateHud();
         updateStartBadge();
+        updateEndBadge();
         render();
         return data;
       })
@@ -234,7 +242,56 @@ const Player = (function () {
     updateStartBadge();
     updateHud();
     render();
-    window.__onTrimParamFilled && window.__onTrimParamFilled();
+    window.__onTrimParamFilled && window.__onTrimParamFilled("start_value");
+  }
+
+  // ---------------- 设为终点（区间裁剪） ----------------
+  // 读取当前播放帧，根据「终点方式」自动填入帧序号或时间戳到裁剪参数；
+  // 终点方式为「无（到片尾）」时自动沿用起点方式（两者保持相互独立，可事后修改）。
+  function setAsEnd() {
+    if (!info || !path) { window.toast && toast("warn", "请先选择视频"); return; }
+    const fps = info.fps || 30;
+    const t = Math.max(0, currentTime);
+    const frameOneBased = Math.round(t * fps) + 1;
+    let modeEl = document.getElementById("param-end_mode");
+    let mode = (modeEl && modeEl.value) || "none";
+    if (mode === "none") {
+      const startModeEl = document.getElementById("param-start_mode");
+      mode = (startModeEl && startModeEl.value) || "frame";
+      setParam("end_mode", mode);  // 触发 app.js 联动启用终点输入框
+    }
+    endMark = { time: t, frameOneBased };
+    const token = ++stepToken;
+    fetchFrame(t).then((img) => { if (token === stepToken) { exactImg = img; render(); } }).catch(() => {});
+    if (mode === "timestamp") {
+      setParam("end_value", t.toFixed(6));
+      window.toast && toast("success", "已以当前帧时间戳 " + formatTime(t) + " 设为裁剪终点（-T）");
+    } else {
+      setParam("end_value", frameOneBased);
+      window.toast && toast("success", "已以当前帧 第 " + frameOneBased + " 帧 @ " + formatTime(t) + " 设为裁剪终点（-F）");
+    }
+    updateEndBadge();
+    updateHud();
+    render();
+    window.__onTrimParamFilled && window.__onTrimParamFilled("end_value");
+  }
+
+  // ---------------- 清除终点 ----------------
+  // 「清除终点」入口：终点方式切回「无（到片尾）」并清除终点标记，
+  // 退化为原有片头裁剪行为；不触碰起点参数（两者相互独立）。
+  function clearEnd() {
+    const modeEl = document.getElementById("param-end_mode");
+    if (modeEl && modeEl.value !== "none") {
+      setParam("end_mode", "none");  // 触发 app.js 联动：清空终点值并清除标记
+    } else {
+      clearEndMark();
+    }
+  }
+
+  function clearEndMark() {
+    endMark = null;
+    updateEndBadge();
+    render();
   }
 
   // ---------------- 检测标记 ----------------
@@ -316,6 +373,7 @@ const Player = (function () {
       ctx.drawImage(exactImg, rect.x, rect.y, rect.w, rect.h);
     }
     drawMarkers(ctx, rect);
+    drawEndTag(ctx, rect);
     drawScrubber();
   }
 
@@ -354,6 +412,27 @@ const Player = (function () {
     });
   }
 
+  // ---------------- 终点画面标注（区别于起点 / 检测标记的颜色） ----------------
+  function drawEndTag(ctx, rect) {
+    if (!endMark) return;
+    const text = "终点 第 " + endMark.frameOneBased + " 帧 @ " + formatTime(endMark.time);
+    ctx.save();
+    ctx.font = '12px "Segoe UI", "Microsoft YaHei", sans-serif';
+    const w = ctx.measureText(text).width + 16;
+    const h = 22;
+    const x = rect.x + rect.w - w - 10;
+    const y = rect.y + 10;
+    ctx.fillStyle = "rgba(20,26,40,0.78)";
+    ctx.strokeStyle = "rgba(79,140,255,0.85)";
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = "#4f8cff";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x + 8, y + h / 2 + 0.5);
+    ctx.restore();
+  }
+
   // ---------------- 进度条（自定义 + 标记指示器） ----------------
   function initScrubber() {
     const setFromEvent = (ev) => {
@@ -389,6 +468,7 @@ const Player = (function () {
     const marks = [];
     if (detectedMark && dur > 0) marks.push({ t: detectedMark.time, cls: "detected", label: "检测帧" });
     if (startMark && dur > 0) marks.push({ t: startMark.time, cls: "captured", label: "起点" });
+    if (endMark && dur > 0) marks.push({ t: endMark.time, cls: "end", label: "终点" });
     marks.forEach((mk) => {
       const d = document.createElement("div");
       d.className = "scrub-mark " + mk.cls;
@@ -422,6 +502,16 @@ const Player = (function () {
         ? "起点：第 " + startMark.frameOneBased + " 帧 @ " + formatTime(startMark.time)
         : "";
       els.startBadge.classList.toggle("on", !!startMark);
+    }
+  }
+
+  function updateEndBadge() {
+    if (els.endBadge) {
+      els.endBadge.textContent = endMark
+        ? "✕ 终点：第 " + endMark.frameOneBased + " 帧 @ " + formatTime(endMark.time)
+        : "";
+      els.endBadge.classList.toggle("on", !!endMark);
+      els.endBadge.title = endMark ? "点击清除终点（恢复保留到片尾）" : "";
     }
   }
 
@@ -466,6 +556,8 @@ const Player = (function () {
     seekTo,
     stepFrames,
     setAsStart,
+    setAsEnd,
+    clearEndMark,
     setDetected,
     clearDetected,
     setMarkersVisible,

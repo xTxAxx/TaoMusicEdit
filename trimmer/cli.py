@@ -27,12 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         prog="trimmer",
-        description="基于 FFmpeg 的高精度视频裁剪工具：支持按帧序号或时间戳从指定位置开始"
-                    "保留视频（裁剪掉开头部分），默认流复制快速裁剪，可选重编码并自动匹配"
-                    "原视频参数、GPU 硬件加速。",
+        description="基于 FFmpeg 的高精度视频裁剪工具：按帧序号或时间戳指定起点（可选终点）"
+                    "裁剪视频——终点缺省时保留到片尾，提供终点时保留 [起点, 终点) 区间；"
+                    "默认流复制快速裁剪，可选重编码并自动匹配原视频参数、GPU 硬件加速。",
         epilog="示例:\n"
-               "  trimmer input.mp4 -t 24.9                # 按时间戳裁剪（流复制）\n"
+               "  trimmer input.mp4 -t 24.9                # 按时间戳裁剪（流复制，保留到片尾）\n"
                "  trimmer input.mp4 -f 900                 # 按帧序号裁剪\n"
+               "  trimmer input.mp4 -t 24.9 -T 3600        # 区间裁剪：保留 [24.9s, 3600s)\n"
+               "  trimmer input.mp4 -f 735 -F 108000       # 帧序号区间：保留 [第735帧, 第108000帧)\n"
                "  trimmer input.mp4 -t 24.9 -r --hw-accel  # 重编码并启用 GPU 加速\n"
                "  trimmer input.mp4 -t 24.9 --no-audio     # 输出无声视频\n"
                "  trimmer input.mp4 -t 24.9 --audio-only   # 仅输出音频\n"
@@ -49,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="裁剪起始时间戳（秒，浮点数，如 24.9），保留此后内容，与 --frame 二选一")
     cut.add_argument("-f", "--frame", type=int, dest="frame", metavar="N",
                      help="裁剪起始帧序号（从 1 开始），保留第 N 帧及之后内容，与 --timestamp 二选一")
+
+    # 区间终点（可选）：与起点方式可不同，内部统一换算为时间戳执行
+    end = parser.add_mutually_exclusive_group()
+    end.add_argument("-T", "--end-timestamp", type=float, dest="end_timestamp", metavar="SEC",
+                     help="裁剪终点时间戳（秒，浮点数），保留 [起点, 终点) 区间；"
+                          "与 --end-frame 二选一，缺省 = 保留到片尾")
+    end.add_argument("-F", "--end-frame", type=int, dest="end_frame", metavar="N",
+                     help="裁剪终点帧序号（从 1 开始），保留 [起点, 终点) 区间；"
+                          "与 --end-timestamp 二选一，缺省 = 保留到片尾")
 
     # 输入 / 输出
     parser.add_argument("-o", "--output", dest="output", metavar="FILE",
@@ -100,6 +111,8 @@ def build_config(args: argparse.Namespace) -> TrimmerConfig:
         input_path=args.input,
         timestamp=args.timestamp,
         frame=args.frame,
+        end_timestamp=args.end_timestamp,
+        end_frame=args.end_frame,
         output=args.output,
         output_dir=args.output_dir,
         suffix=args.suffix,
@@ -140,6 +153,12 @@ def print_result(result) -> None:
         print(f"  从第 {result.frame} 帧开始（{result.timestamp:.6f}s）")
     else:
         print(f"  从 {result.timestamp:.6f}s 开始")
+    if result.end_timestamp is not None:
+        if result.end_frame:
+            print(f"  到第 {result.end_frame} 帧结束（{result.end_timestamp:.6f}s，"
+                  "保留 [起点, 终点) 区间）")
+        else:
+            print(f"  到 {result.end_timestamp:.6f}s 结束（保留 [起点, 终点) 区间）")
     print(f"  处理方式: {result.message}")
     print("  输出文件:")
     for out in result.output_files:

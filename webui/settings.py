@@ -32,7 +32,8 @@ DEFAULT_DETECTOR = {
 }
 
 #: trimmer 参数默认值（与前端 static/js/params.js 的 default 保持一致）。
-#: 裁剪起点（start_mode / start_value）因视频而异，不参与持久化，故不在此列出。
+#: 裁剪起点 / 终点（start_mode / start_value / end_mode / end_value）
+#: 因视频而异，不参与持久化，故不在此列出。
 DEFAULT_TRIMMER = {
     "suffix": "_trim",
     "output_mode": "full",

@@ -318,6 +318,7 @@ body {
 }
 .scrub-mark.detected { background: var(--ok); }
 .scrub-mark.captured { background: var(--warn); }
+.scrub-mark.end { background: var(--accent); }
 .meta-line #timecode { font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
 /* 第 3 行：起点徽标 + 视频元数据 */
@@ -333,6 +334,14 @@ body {
   display: none;
 }
 .start-badge.on { display: inline-block; }
+/* 终点徽标：颜色区别于起点（--warn）/ 检测标记（--ok），点击可清除终点 */
+.end-badge {
+  color: var(--accent); font-family: var(--mono);
+  border: 1px solid rgba(79,140,255,0.5); border-radius: 6px; padding: 2px 8px;
+  display: none; cursor: pointer;
+}
+.end-badge.on { display: inline-block; }
+.end-badge.on:hover { background: rgba(79,140,255,0.12); }
 
 /* ---------------- 参数面板 ---------------- */
 .panels {

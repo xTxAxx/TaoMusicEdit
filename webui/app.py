@@ -43,6 +43,9 @@ from detector import VideoColorDetector, hex_to_rgb  # noqa: E402
 from detector.core.errors import DetectorError  # noqa: E402
 from detector.utils.ffmpeg import probe_video, read_frame  # noqa: E402
 from trimmer import OutputMode, Trimmer, TrimmerConfig  # noqa: E402
+from trimmer.core.errors import TrimmerError  # noqa: E402
+from trimmer.core.probe import probe as trimmer_probe  # noqa: E402
+from trimmer.utils.validation import validate_frame, validate_timestamp  # noqa: E402
 
 from jobs import JobCancelled, manager, sse_payload  # noqa: E402
 
@@ -889,35 +892,68 @@ def api_detect_cache_clear():
 # ---------------------------------------------------------------------------
 # Trimmer 任务
 # ---------------------------------------------------------------------------
+def _parse_start_value(params: dict) -> tuple[int | None, float | None]:
+    """从请求参数解析裁剪起点（帧序号 / 时间戳二选一），非法时抛 ValueError。"""
+    mode = params.get("start_mode", "frame")
+    raw = params.get("start_value")
+    if raw is None or str(raw).strip() == "":
+        raise ValueError("请填写裁剪起点（可先执行检测或捕获当前帧后点击「设为起点」）")
+    if mode == "frame":
+        try:
+            return int(float(str(raw).strip())), None
+        except (TypeError, ValueError):
+            raise ValueError("帧序号必须是整数") from None
+    if mode == "timestamp":
+        try:
+            return None, float(str(raw).strip())
+        except (TypeError, ValueError):
+            raise ValueError("时间戳必须是数字（秒）") from None
+    raise ValueError("起点方式非法")
+
+
+def _parse_end_point(params: dict) -> tuple[int | None, float | None]:
+    """从请求参数解析裁剪终点（可选），返回 ``(end_frame, end_timestamp)``。
+
+    终点方式为「无」（``end_mode`` 为 null / 缺省 / ``"none"``）且未填写
+    终点值时返回 ``(None, None)``，表示保留到片尾（与原有行为一致）；
+    方式与数值不匹配、数值非法时抛 ValueError（消息可直接展示）。
+    """
+    mode = params.get("end_mode")
+    raw = params.get("end_value")
+    raw_empty = raw is None or str(raw).strip() == ""
+    if mode in (None, "", "none"):
+        if not raw_empty:
+            raise ValueError("终点方式为「无（到片尾）」时不应填写终点值，请清空裁剪终点")
+        return None, None
+    if raw_empty:
+        raise ValueError("已选择终点方式，请填写裁剪终点（可播放定位后点击「设为终点」捕获当前帧）")
+    if mode == "frame":
+        try:
+            return int(float(str(raw).strip())), None
+        except (TypeError, ValueError):
+            raise ValueError("终点帧序号必须是整数") from None
+    if mode == "timestamp":
+        try:
+            return None, float(str(raw).strip())
+        except (TypeError, ValueError):
+            raise ValueError("终点时间戳必须是数字（秒）") from None
+    raise ValueError("终点方式非法")
+
+
 def build_trimmer_config(path: str, params: dict, output_dir: str,
                          start_override: dict | None = None) -> TrimmerConfig:
     """构建裁剪配置并校验必要参数。
 
     ``start_override`` 可指定该文件专属的起点（如批处理中来自检测结果），
     形如 ``{"frame": 735}`` 或 ``{"timestamp": 24.5}``；缺省时使用 params 中的统一起点。
+    终点（``end_mode`` / ``end_value``）为可选参数组，与起点相互独立；
+    params 中不含终点参数（批处理场景）时等价于无终点（保留到片尾）。
     """
     start_override = start_override or {}
     frame = start_override.get("frame")
     timestamp = start_override.get("timestamp")
     if frame is None and timestamp is None:
-        mode = params.get("start_mode", "frame")
-        raw = params.get("start_value")
-        if raw is None or str(raw).strip() == "":
-            raise ValueError("请填写裁剪起点（可先执行检测或捕获当前帧后点击「设为起点」）")
-        if mode == "frame":
-            try:
-                frame = int(float(str(raw).strip()))
-            except (TypeError, ValueError):
-                raise ValueError("帧序号必须是整数") from None
-            timestamp = None
-        elif mode == "timestamp":
-            try:
-                timestamp = float(str(raw).strip())
-            except (TypeError, ValueError):
-                raise ValueError("时间戳必须是数字（秒）") from None
-            frame = None
-        else:
-            raise ValueError("起点方式非法")
+        frame, timestamp = _parse_start_value(params)
     elif frame is not None:
         try:
             frame = int(float(frame))
@@ -931,11 +967,15 @@ def build_trimmer_config(path: str, params: dict, output_dir: str,
             raise ValueError("时间戳必须是数字（秒）") from None
         frame = None
 
+    end_frame, end_timestamp = _parse_end_point(params)
+
     suffix = (params.get("suffix") or "_trim").strip()
     return TrimmerConfig(
         input_path=path,
         frame=frame,
         timestamp=timestamp,
+        end_frame=end_frame,
+        end_timestamp=end_timestamp,
         output_dir=output_dir or None,
         suffix=suffix,
         force=bool(params.get("force", False)),
@@ -972,15 +1012,63 @@ def run_trim(job, payload: dict) -> dict:
         "output_mode": result.output_mode.value,
         "timestamp": result.timestamp,
         "frame": result.frame,
+        "end_timestamp": result.end_timestamp,
+        "end_frame": result.end_frame,
         "cut_duration": result.cut_duration,
         "reencoded": result.reencoded,
         "hw_accelerated": result.hw_accelerated,
     }
 
 
+def _validate_trim_request(data: dict) -> str | None:
+    """同步校验 /api/trim 请求中的终点参数，返回错误消息（合法时为 None）。
+
+    - 终点方式与数值不匹配 / 数值非法：直接报错（400，含行内错误消息）；
+    - 终点超出范围、终点 ≤ 起点：探测输入后换算比较报错（400）；
+    - 起点参数 / 路径等其他错误：维持现状，交由后台任务通过 SSE 报错。
+    """
+    params = data.get("params") or {}
+    try:
+        end_frame, end_timestamp = _parse_end_point(params)
+    except ValueError as exc:
+        return str(exc)
+    if end_frame is None and end_timestamp is None:
+        return None
+    path = data.get("path") or ""
+    if not path or not os.path.isfile(path):
+        return None  # 路径错误交由后台任务报错（现状行为）
+    try:
+        media = trimmer_probe(path)
+    except TrimmerError:
+        return None  # 探测失败交由后台任务报错（现状行为）
+    try:
+        end_time = (validate_timestamp(end_timestamp, media, label="终点时间戳")
+                    if end_timestamp is not None
+                    else validate_frame(end_frame, media, label="终点帧序号"))
+    except TrimmerError as exc:
+        return exc.message  # 终点超出视频时长 / 总帧数
+    try:
+        start_frame, start_timestamp = _parse_start_value(params)
+    except ValueError:
+        return None  # 起点参数错误交由后台任务报错（现状行为）
+    try:
+        start_time = (validate_timestamp(start_timestamp, media)
+                      if start_timestamp is not None
+                      else validate_frame(start_frame, media))
+    except TrimmerError:
+        return None
+    if end_time <= start_time:
+        return f"终点必须大于起点：终点 {end_time:.6f}s ≤ 起点 {start_time:.6f}s"
+    return None
+
+
 @app.route("/api/trim", methods=["POST"])
 def api_trim():
     data = request.get_json(force=True, silent=True) or {}
+    # 终点参数同步校验：方式冲突 / end ≤ start / 超范围 → 400 与行内错误消息
+    message = _validate_trim_request(data)
+    if message:
+        return jsonify({"ok": False, "message": message}), 400
     jid = manager.create("trim", "视频裁剪", lambda job: run_trim(job, data))
     return jsonify({"ok": True, "job_id": jid})
 
@@ -988,7 +1076,12 @@ def api_trim():
 def run_batch_trim(job, payload: dict) -> dict:
     """批量执行视频裁剪：每个文件使用各自的起点（来自检测结果或统一起点）。"""
     items = payload.get("files") or []  # [{path, frame?|timestamp?, skip?}]
-    params = payload.get("params") or {}
+    params = dict(payload.get("params") or {})
+    # 批量 Trim 维持现状：以检测结果为起点、无终点（保留到片尾）。
+    # 区间终点为单视频交互式能力（逐视频人工定位），不适用于批处理，
+    # 因此显式忽略可能随请求传入的终点参数。
+    params.pop("end_mode", None)
+    params.pop("end_value", None)
     output_dir = payload.get("output_dir") or ""
     total = len(items)
     results = []

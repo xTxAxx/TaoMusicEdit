@@ -9,6 +9,8 @@ from trimmer.core.errors import InputNotFoundError, UnsupportedFormatError, Vali
 from trimmer.core.probe import AudioStream, MediaInfo, VideoStream
 from trimmer.utils.validation import (
     validate_cut_params,
+    validate_end_after_start,
+    validate_end_params,
     validate_frame,
     validate_input_path,
     validate_timestamp,
@@ -104,6 +106,78 @@ class TestFrame:
                                   bit_rate=None, pix_fmt="")
         with pytest.raises(ValidationError):
             validate_frame(10, media)
+
+
+class TestEndParams:
+    """终点参数二选一校验（均可缺省 = 保留到片尾）。"""
+
+    def test_neither(self):
+        assert validate_end_params(None, None) == (None, None)
+
+    def test_both(self):
+        with pytest.raises(ValidationError):
+            validate_end_params(60.0, 1800)
+
+    def test_timestamp(self):
+        assert validate_end_params(60.0, None) == ("timestamp", 60.0)
+
+    def test_frame(self):
+        assert validate_end_params(None, 1800) == ("frame", 1800)
+
+
+class TestEndTimestamp:
+    """终点时间戳校验（范围规则与起点对称，标签区分错误消息）。"""
+
+    def test_valid(self):
+        assert validate_timestamp(60.0, _media(), label="终点时间戳") == 60.0
+
+    def test_non_positive(self):
+        with pytest.raises(ValidationError):
+            validate_timestamp(0, _media(), label="终点时间戳")
+
+    def test_exceeds_duration(self):
+        with pytest.raises(ValidationError):
+            validate_timestamp(200.0, _media(duration=100.0), label="终点时间戳")
+
+    def test_error_message_labeled(self):
+        with pytest.raises(ValidationError, match="终点时间戳"):
+            validate_timestamp(0, _media(), label="终点时间戳")
+
+
+class TestEndFrame:
+    """终点帧序号校验（范围规则与起点对称）。"""
+
+    def test_valid(self):
+        # 第 1801 帧终点时间 = 1800/30 = 60s
+        assert validate_frame(1801, _media(fps=30.0), label="终点帧序号") == pytest.approx(60.0)
+
+    def test_exceeds_total(self):
+        with pytest.raises(ValidationError):
+            validate_frame(10000, _media(fps=30.0, nb_frames=3000), label="终点帧序号")
+
+    def test_zero(self):
+        with pytest.raises(ValidationError):
+            validate_frame(0, _media(), label="终点帧序号")
+
+
+class TestEndAfterStart:
+    """终点 > 起点顺序校验（换算为时间戳后比较）。"""
+
+    def test_valid(self):
+        assert validate_end_after_start(60.0, 24.9) == 60.0
+
+    def test_equal_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_end_after_start(24.9, 24.9)
+
+    def test_less_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_end_after_start(10.0, 24.9)
+
+    def test_mixed_modes_via_conversion(self):
+        # 起点=帧序号 735（24.467s）、终点=时间戳 24.5s → 换算后终点 > 起点
+        start_time = (735 - 1) / 30.0
+        assert validate_end_after_start(24.5, start_time) == 24.5
 
 
 class TestInputPath:
