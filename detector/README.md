@@ -16,7 +16,7 @@
 - **FFmpeg 精确抽帧**：通过 `ffmpeg -ss` 输入定位 + 单帧解码抽帧，快速、精确；提供 OpenCV 提取器作为回退。
 - **进度回调与日志**：分阶段进度回调（0~1），结构化日志记录关键过程。
 - **完善的异常体系**：统一捕获 `DetectorError`，细分文件不存在 / 格式不支持 / FFmpeg 失败等异常。
-- **测试完备**：85 个单元 / 集成 / 性能测试全部通过。
+- **测试完备**：86 个单元 / 集成 / 性能测试全部通过。
 
 ---
 
@@ -81,6 +81,7 @@ py detector\cli.py video.mp4 --points 20,20 300,300  # 自定义检测点（数�
 py detector\cli.py video.mp4 --points 100,100 --no-scale-points  # 关闭坐标缩放
 py detector\cli.py video.mp4 --detail             # 详细诊断（写入 stderr）
 py detector\cli.py video.mp4 --extractor opencv   # 使用 OpenCV 提取器
+py detector\cli.py video.mp4 --log-level DEBUG    # 调整日志级别（默认 WARNING，日志写入 stderr）
 ```
 
 等价的模块入口（无需安装，在项目根目录下运行）：
@@ -137,7 +138,7 @@ py -m pytest
 
 | 阶段 | 说明 |
 | --- | --- |
-| ① 初始阶段（反向跳帧） | 从 `initial_start`（默认 35s）起，按 `coarse_step`（默认 5s）向 0 **反向**抽帧，得到粗粒度采样序列（并补扫窗口上端，覆盖 `[0, 40]`） |
+| ① 初始阶段（反向跳帧） | 在 `[0, search_window]` 上按 `coarse_step`（默认 5s）生成粗采样序列，执行时自窗口上端（默认 40s）向 0 **反向**逐点抽帧，完整覆盖 `[0, 40]` |
 | ② 定位阶段 | 找最后一个「匹配 → 不匹配」的过渡，得到粗区间 `(t_hit, t_next]`，其中 `t_hit` 满足、`t_next` 不满足 |
 | ③ 细化阶段 | 在 `(t_hit, t_next]` 内以 `fine_step`（默认 1s）再次检测，得到更窄区间 `(t_hit_f, t_next_f]` |
 | ④ 精确阶段 | 在 `(t_hit_f, t_next_f]` 内逐帧扫描，返回**最后一个**命中帧（帧序号 + 时间戳 + 各点置信度） |
@@ -150,7 +151,7 @@ py -m pytest
 以 `input1.mp4` 为例的检测轨迹：
 
 ```
-coarse   反向抽帧 t=35(否)→30(否)→25(否)→20(命中)→15(命中)→10(命中)→5(否)→0(否) → 补扫 40(否)
+coarse   反向抽帧 t=40(否)→35(否)→30(否)→25(否)→20(命中)→15(命中)→10(命中)→5(否)→0(否)（自窗口上端向下反向扫描）
 locate   定位粗区间 (20.00, 25.00]
 fine     细化 t=21(命中)→22(命中)→23(命中)→24(命中)→25(否) → 细化区间 (24.00, 25.00]
 precise  逐帧 frame 720~733(命中) → 734(最后一个命中) → 目标帧 frame=734, time=24.466667s
@@ -204,6 +205,7 @@ conf = color_confidence((245, 254, 19), rgb, tolerance=10.0)   # ≈ 1.0
 | `coarse_step` | `float` | `5.0` | 初始大步长（秒/次） |
 | `fine_step` | `float` | `1.0` | 细化步长（秒/次） |
 | `extractor` | `str` | `"ffmpeg"` | 帧提取器：`"ffmpeg"` / `"opencv"` |
+| `hwaccel` | `str` | `"none"` | GPU 硬件解码策略：`auto`（按平台自动探测）/ `none`（CPU 软解）/ `d3d11va`、`dxva2`（Windows）/ `cuda`（N 卡）/ `qsv`（Intel 核显）/ `vaapi`（Linux）/ `videotoolbox`（macOS）；所选后端不可用时自动降级软解 |
 | `ffmpeg_path` / `ffprobe_path` | `str` | `"ffmpeg"` / `"ffprobe"` | 可执行文件路径 |
 | `log_level` | `str` | `"INFO"` | 日志级别 |
 | `progress_callback` | `callable` | `None` | 全局进度回调（可被 `detect()` 参数覆盖） |
@@ -284,14 +286,14 @@ VideoColorDetector(config: DetectorConfig = None, **overrides)
 
 ## 10. 测试报告
 
-共 **85 个测试用例，全部通过**（`py -m pytest`）。
+共 **86 个测试用例，全部通过**（`py -m pytest`）。
 
 | 文件 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
 | `tests/test_color.py` | 14 | 颜色转换、置信度度量、容差、阈值边界 |
 | `tests/test_config.py` | 19 | 默认值、参数校验（合法/非法）、覆盖、冲突 |
 | `tests/test_algorithm.py` | 20 | 核心算法：命中/未命中、精确起始帧、边界 onset；结尾帧（offset）、边界 offset、进度回调、参数校验 |
-| `tests/test_detector.py` | 19 | 合成视频端到端精确检测、真实视频检测、坐标缩放、异常处理、公共 API |
+| `tests/test_detector.py` | 20 | 合成视频端到端精确检测、真实视频检测、坐标缩放、异常处理、公共 API |
 | `tests/test_ffmpeg.py` | 10 | ffprobe 元数据、单帧/区间抽取、合成视频无损抽取、两种提取器 |
 | `tests/test_performance.py` | 3 | 单帧抽取速度、整体耗时、探测帧数上界（验证不整片解码） |
 

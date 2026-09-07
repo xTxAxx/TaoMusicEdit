@@ -17,7 +17,10 @@ classifiers = [
 ]
 
 [project.scripts]
-video-trimmer = "video_trimmer.cli:main"
+trimmer = "trimmer.cli:main"
 
 [tool.setuptools]
-packages = ["video_trimmer"]
+# 包目录即项目根目录本身，需用 package-dir 将包名映射到 "."：
+# 以便 `pip install ./trimmer` 后将整个 trimmer 目录作为可导入的包
+packages = ["trimmer", "trimmer.core", "trimmer.utils"]
+package-dir = { "trimmer" = "." }

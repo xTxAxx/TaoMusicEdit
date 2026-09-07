@@ -81,6 +81,7 @@ trimmer INPUT (-t 时间戳 | -f 帧序号) [选项]
 | `--no-audio, --video-only` | 仅输出视频流（无声视频） |
 | `--audio-only` | 仅输出音频流 |
 | `--split` | 分离输出视频文件与音频文件 |
+| `--verbose` | 输出详细调试日志 |
 | `-V, --version` | 显示版本号 |
 
 ### 示例
@@ -190,7 +191,7 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0,
 
 ## 支持格式
 
-输入：MP4、AVI、MKV、MOV、WEBM、FLV、M4V、MPEG、TS、WTV、3GP、OGV 等（扩展名白名单校验，
+输入：MP4、AVI、MKV、MOV、WEBM、FLV、M4V、MPEG/MPG、TS、MTS/M2TS、WMV、3GP/3G2、OGV 等（扩展名白名单校验，
 实际以 FFmpeg 能力为准）。输出容器默认沿用输入格式。
 
 ## 测试
@@ -198,6 +199,8 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0,
 ```bash
 python -m pytest trimmer/tests -q
 ```
+
+共 **71 个测试全部通过**（`python -m pytest trimmer/tests -q`）。
 
 包含单元测试（校验、CLI 解析、命令构建、输出路径）与集成测试
 （生成 10 秒测试视频，验证时间戳/帧序号/纯音频/无声/分离/覆盖确认/错误处理，
