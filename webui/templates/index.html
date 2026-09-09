@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaoMusicEdit · 视频检测与裁剪工作台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=22">
+<link rel="stylesheet" href="/static/css/style.css?v=23">
 </head>
 <body>
 
@@ -103,10 +103,14 @@
 
       <div class="player-controls">
         <div class="timeline">
-          <div class="scrubber" id="scrubber" title="拖动跳转进度">
+          <div class="scrubber" id="scrubber" title="拖动跳转进度；按住 Ctrl 滚动滚轮缩放时间轴；双击恢复全览">
+            <canvas class="scrub-wave" id="scrubWave"></canvas>
             <div class="scrub-fill" id="scrubFill"></div>
             <div class="scrub-marks" id="scrubMarks"></div>
             <div class="scrub-thumb" id="scrubThumb"></div>
+          </div>
+          <div class="zoom-scroll" id="zoomScroll" title="拖动或点击以平移时间轴可见范围">
+            <div class="zoom-view" id="zoomView"></div>
           </div>
         </div>
         <div class="transport">
@@ -213,7 +217,7 @@
 </div>
 
 <script src="/static/js/params.js?v=11"></script>
-<script src="/static/js/player.js?v=9"></script>
+<script src="/static/js/player.js?v=10"></script>
 <script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

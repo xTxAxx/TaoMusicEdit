@@ -21,6 +21,21 @@ const Player = (function () {
   let scrubbing = false;
   let inited = false;
 
+  // —— 时间轴视口（缩放 / 平移共用）——
+  let viewStart = 0;          // 可见窗口起点（秒）
+  let viewDur = 0;            // 可见窗口时长（秒）；0 = 尚未初始化
+  let zoomDragging = false;   // 时间轴缩略条拖动中
+  let zoomDragOffset = 0;     // 拖动时指针相对缩略条左缘的偏移（px）
+  let wave = null;            // 概览波峰 { start, end, peaks:[[min,max],...] }
+  let waveCache = new Map();  // 窗口波峰缓存：key "start:end:buckets" -> 条目
+  let waveToken = 0;          // 概览请求令牌（防止旧视频响应覆盖新视频）
+  let waveReqToken = 0;       // 窗口请求令牌（防止过期响应覆盖当前视图）
+  let waveTimer = null;       // 窗口请求防抖定时器
+
+  const ZOOM_STEP = 1.15;     // 滚轮每格缩放倍数
+  const WAVE_BUCKETS = 2000;  // 概览波峰桶数
+  const WAVE_CACHE_MAX = 24;  // 窗口波峰缓存条数（LRU）
+
   function init() {
     if (inited) return;
     inited = true;
@@ -30,11 +45,13 @@ const Player = (function () {
     els.btnPlay = document.getElementById("btnPlay");
     els.btnPrev = document.getElementById("btnPrev");
     els.btnNext = document.getElementById("btnNext");
-    els.volume = document.getElementById("volume");
     els.scrubber = document.getElementById("scrubber");
+    els.scrubWave = document.getElementById("scrubWave");
     els.scrubFill = document.getElementById("scrubFill");
     els.scrubThumb = document.getElementById("scrubThumb");
     els.scrubMarks = document.getElementById("scrubMarks");
+    els.zoomScroll = document.getElementById("zoomScroll");
+    els.zoomView = document.getElementById("zoomView");
     els.timecode = document.getElementById("timecode");
     els.frameInfo = document.getElementById("frameInfo");
     els.videoMeta = document.getElementById("videoMeta");
@@ -68,6 +85,14 @@ const Player = (function () {
     els.video.addEventListener("timeupdate", () => {
       // 精确帧模式下 currentTime 由逐帧/检测跳转控制，避免 <video> 位置漂移覆盖
       if (!scrubbing && !exactImg) currentTime = els.video.currentTime;
+      // 播放中播放头移出可见窗口时自动平移跟随（用户拖动缩略条时除外）
+      if (info && viewDur > 0 && viewDur < info.duration - 1e-6 &&
+          !scrubbing && !zoomDragging && !els.video.paused) {
+        if (currentTime < viewStart || currentTime > viewStart + viewDur) {
+          viewStart = Math.max(0, Math.min(currentTime - viewDur / 2, info.duration - viewDur));
+          scheduleWaveWindow();
+        }
+      }
       updateHud();
       render();
     });
@@ -87,6 +112,8 @@ const Player = (function () {
     });
 
     initScrubber();
+    initZoomScroll();
+    initScrubZoom();
     window.addEventListener("keydown", onKeydown);
     window.addEventListener("resize", () => render());
     if (window.ResizeObserver) {
@@ -103,6 +130,13 @@ const Player = (function () {
     detectedMark = null;
     endMark = null;
     exactImg = null;
+    viewStart = 0;
+    viewDur = 0;
+    wave = null;
+    waveCache.clear();
+    waveToken++;
+    waveReqToken++;
+    if (waveTimer) { clearTimeout(waveTimer); waveTimer = null; }
     els.playerLoading.hidden = false;
     return fetch("/api/probe?path=" + encodeURIComponent(vpath))
       .then((r) => r.json())
@@ -111,6 +145,7 @@ const Player = (function () {
           throw new Error(data.message || "无法解析视频");
         }
         info = data;
+        viewDur = data.duration;
         currentTime = 0;
         els.video.src = "/media?path=" + encodeURIComponent(vpath);
         updateMeta();
@@ -118,6 +153,7 @@ const Player = (function () {
         updateStartBadge();
         updateEndBadge();
         render();
+        loadWaveform();
         return data;
       })
       .catch((err) => {
@@ -439,8 +475,9 @@ const Player = (function () {
   function initScrubber() {
     const setFromEvent = (ev) => {
       const rect = els.scrubber.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-      const t = ratio * (info ? info.duration : 0);
+      const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+      // 在可见窗口内换算时间：点击/拖动只在当前视口范围内生效
+      const t = xToTime(x);
       currentTime = t;
       setVideoTime(t);
       updateHud();
@@ -461,9 +498,246 @@ const Player = (function () {
     els.scrubber.addEventListener("pointercancel", () => { scrubbing = false; });
   }
 
+  // ---------------- 时间轴视口：缩放 / 平移 / 波形 ----------------
+  // 可见窗口 [viewStart, viewStart+viewDur] 映射到进度条全宽。
+  function viewDurMin() {
+    const fps = (info && info.fps) || 30;
+    return Math.max(0.1, 2 / fps);  // 至少缩放到 2 帧
+  }
+
+  function xToTime(x) {
+    if (!info || viewDur <= 0) return viewStart || 0;
+    return viewStart + (x / els.scrubber.clientWidth) * viewDur;
+  }
+
+  // 锚点式缩放：保持鼠标下的时间点不动，拉长/缩短可见窗口
+  function zoomAt(x, factor) {
+    if (!info || viewDur <= 0) return;
+    const dur = info.duration;
+    const W = els.scrubber.clientWidth || 1;
+    const ratio = Math.max(0, Math.min(1, x / W));
+    const anchor = viewStart + ratio * viewDur;
+    let nd = viewDur * factor;
+    nd = Math.max(viewDurMin(), Math.min(nd, dur));
+    let ns = anchor - ratio * nd;
+    ns = Math.max(0, Math.min(ns, dur - nd));
+    viewStart = ns;
+    viewDur = nd;
+    afterViewChange();
+  }
+
+  function panTo(t) {
+    if (!info || viewDur <= 0) return;
+    const dur = info.duration;
+    viewStart = Math.max(0, Math.min(t, dur - viewDur));
+    afterViewChange();
+  }
+
+  function resetView() {
+    if (!info) return;
+    viewStart = 0;
+    viewDur = info.duration;
+    afterViewChange();
+  }
+
+  function afterViewChange() {
+    updateHud();
+    render();
+    scheduleWaveWindow();
+  }
+
+  // 概览波形：载入视频时拉取整段低分辨率波峰
+  function loadWaveform() {
+    if (!path || !info) return;
+    const token = ++waveToken;
+    fetch("/api/waveform?path=" + encodeURIComponent(path) +
+      "&start=0&end=" + info.duration + "&buckets=" + WAVE_BUCKETS)
+      .then((r) => r.json())
+      .then((data) => {
+        if (token !== waveToken || !data.ok) return;
+        wave = data.has_audio ? { start: 0, end: info.duration, peaks: data.peaks } : null;
+        render();
+      })
+      .catch(() => {});
+  }
+
+  // 从缓存中挑选能完整覆盖当前可见窗口、分辨率最高的波峰数据；兜底用概览
+  function pickWaveData() {
+    const v0 = viewStart, v1 = viewStart + viewDur;
+    let best = null;
+    waveCache.forEach((e) => {
+      if (e.start <= v0 + 1e-6 && e.end >= v1 - 1e-6) {
+        if (!best || (e.end - e.start) < (best.end - best.start)) best = e;
+      }
+    });
+    return best || wave;
+  }
+
+  // 视图变化后防抖请求当前窗口的高分辨率波峰（只解码可见区间）
+  function scheduleWaveWindow() {
+    if (!path || !info) return;
+    if (waveTimer) clearTimeout(waveTimer);
+    waveTimer = setTimeout(requestWaveWindow, 120);
+  }
+
+  function requestWaveWindow() {
+    waveTimer = null;
+    if (!path || !info) return;
+    const dur = info.duration;
+    const W = els.scrubber.clientWidth || 800;
+    const span = viewDur;
+    let s = viewStart - span * 0.2;
+    let e = viewStart + span * 1.2;
+    s = Math.max(0, s);
+    e = Math.min(dur, e);
+    const buckets = Math.min(WAVE_BUCKETS, Math.max(64, Math.ceil(W * 2)));
+    const key = s.toFixed(2) + ":" + e.toFixed(2) + ":" + buckets;
+    if (waveCache.has(key)) { render(); return; }
+    const token = ++waveReqToken;
+    fetch("/api/waveform?path=" + encodeURIComponent(path) +
+      "&start=" + s.toFixed(3) + "&end=" + e.toFixed(3) + "&buckets=" + buckets)
+      .then((r) => r.json())
+      .then((data) => {
+        if (token !== waveReqToken || !data.ok || !data.has_audio) return;
+        waveCache.set(key, { start: data.start, end: data.end, peaks: data.peaks });
+        if (waveCache.size > WAVE_CACHE_MAX) {
+          const it = waveCache.keys().next();
+          if (!it.done) waveCache.delete(it.value);
+        }
+        render();
+      })
+      .catch(() => {});
+  }
+
+  // 时间轴水平滚动条：拖动比例缩略条平移；点击轨道将视图中心对齐到点击处
+  function initZoomScroll() {
+    els.zoomScroll.addEventListener("pointerdown", (ev) => {
+      if (!info || viewDur <= 0) return;
+      const dur = info.duration;
+      const rect = els.zoomScroll.getBoundingClientRect();
+      if (ev.target === els.zoomView) {
+        zoomDragging = true;
+        els.zoomScroll.setPointerCapture(ev.pointerId);
+        zoomDragOffset = ev.clientX - rect.left - (viewStart / dur) * rect.width;
+      } else {
+        const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+        viewStart = ratio * (dur - viewDur) - viewDur / 2;
+        viewStart = Math.max(0, Math.min(viewStart, dur - viewDur));
+        afterViewChange();
+      }
+    });
+    els.zoomScroll.addEventListener("pointermove", (ev) => {
+      if (!zoomDragging) return;
+      const dur = info.duration;
+      const rect = els.zoomScroll.getBoundingClientRect();
+      const ratio = (ev.clientX - rect.left - zoomDragOffset) / rect.width;
+      viewStart = ratio * (dur - viewDur);
+      viewStart = Math.max(0, Math.min(viewStart, dur - viewDur));
+      afterViewChange();
+    });
+    const endDrag = () => { zoomDragging = false; };
+    els.zoomScroll.addEventListener("pointerup", endDrag);
+    els.zoomScroll.addEventListener("pointercancel", endDrag);
+  }
+
+  // 进度条悬停时：Ctrl + 滚轮缩放时间轴；双击恢复全览
+  function initScrubZoom() {
+    els.scrubber.addEventListener("wheel", (ev) => {
+      if (!info) return;
+      if (!ev.ctrlKey && !ev.metaKey) return;  // 未按住 Ctrl 不拦截
+      ev.preventDefault();                     // 阻止浏览器页面缩放
+      const rect = els.scrubber.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+      zoomAt(x, ev.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+    }, { passive: false });
+    els.scrubber.addEventListener("dblclick", () => resetView());
+  }
+
+  function formatTick(sec, step) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const p = (n) => String(n).padStart(2, "0");
+    let text = (h ? h + ":" : "") + p(m) + ":" + p(s);
+    if (step < 1) text += "." + Math.floor((sec % 1) * 10);
+    return text;
+  }
+
+  // 高倍缩放时在波形顶部绘制时间刻度尺，便于精确定位
+  function drawRuler(ctx, W, H) {
+    const dur = info ? info.duration : 0;
+    if (!dur || viewDur > dur / 2) return;
+    const target = 90;  // 目标刻度间距（px）
+    const raw = viewDur / (W / target);
+    let step = 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-6))));
+    for (const m of [1, 2, 5, 10]) {
+      if (m * mag >= raw) { step = m * mag; break; }
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.font = '9px "Segoe UI", "Microsoft YaHei", monospace';
+    ctx.beginPath();
+    const first = Math.ceil(viewStart / step) * step;
+    for (let t = first; t <= viewStart + viewDur + 1e-6; t += step) {
+      const x = (t - viewStart) / viewDur * W;
+      if (x < 0 || x > W) continue;
+      ctx.moveTo(x, 5);
+      ctx.lineTo(x, 11);
+      ctx.fillText(formatTick(t, step), x + 3, 9);
+    }
+    ctx.stroke();
+  }
+
+  // 将波峰绘制到进度条内的 canvas（时间映射与进度条完全一致）
+  function drawWaveform() {
+    const cv = els.scrubWave;
+    const W = els.scrubber.clientWidth, H = els.scrubber.clientHeight;
+    if (!cv || W <= 0 || H <= 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.max(1, Math.round(W * dpr));
+    cv.height = Math.max(1, Math.round(H * dpr));
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawRuler(ctx, W, H);
+    const data = pickWaveData();
+    if (!data || !data.peaks || !data.peaks.length) return;
+    const dataStart = data.start, dataEnd = data.end;
+    const dataSpan = dataEnd - dataStart;
+    const peaks = data.peaks;
+    const B = peaks.length;
+    const top = 16;  // 波形区从刻度尺下方开始
+    const mid = top + (H - top - 4) / 2;
+    const amp = (H - top - 8) / 2;
+    ctx.fillStyle = "rgba(120,180,255,0.6)";
+    for (let x = 0; x < W; x++) {
+      const t0 = viewStart + (x / W) * viewDur;
+      const t1 = viewStart + ((x + 1) / W) * viewDur;
+      let b0 = Math.floor((t0 - dataStart) / dataSpan * B);
+      let b1 = Math.ceil((t1 - dataStart) / dataSpan * B);
+      if (b1 <= 0 || b0 >= B) continue;  // 该列不在数据范围内
+      b0 = Math.max(0, b0);
+      b1 = Math.min(B, b1);
+      let mn = 1, mx = -1;
+      for (let i = b0; i < b1; i++) {
+        const p = peaks[i];
+        if (p[0] < mn) mn = p[0];
+        if (p[1] > mx) mx = p[1];
+      }
+      if (mx < mn) continue;
+      const yTop = mid - mx * amp;
+      const yBot = mid - mn * amp;
+      ctx.fillRect(x, yTop, 1, Math.max(1, yBot - yTop));
+    }
+  }
+
   function drawScrubber() {
     const dur = info ? info.duration : 0;
-    const pct = dur > 0 ? (currentTime / dur) * 100 : 0;
+    // 可见窗口内播放头百分比（越界时钳制到边界）
+    const pct = (dur > 0 && viewDur > 0)
+      ? Math.max(0, Math.min(100, ((currentTime - viewStart) / viewDur) * 100))
+      : 0;
     els.scrubFill.style.width = pct + "%";
     els.scrubThumb.style.left = "calc(" + pct + "% - 7px)";
     els.scrubMarks.innerHTML = "";
@@ -472,12 +746,20 @@ const Player = (function () {
     if (startMark && dur > 0) marks.push({ t: startMark.time, cls: "captured", label: "起点" });
     if (endMark && dur > 0) marks.push({ t: endMark.time, cls: "end", label: "终点" });
     marks.forEach((mk) => {
+      const p = (viewDur > 0) ? ((mk.t - viewStart) / viewDur) * 100 : -1;
+      if (p < -3 || p > 103) return;  // 窗口外的标记不显示
       const d = document.createElement("div");
       d.className = "scrub-mark " + mk.cls;
-      d.style.left = (mk.t / dur * 100) + "%";
+      d.style.left = Math.max(0, Math.min(100, p)) + "%";
       d.title = mk.label + " @ " + formatTime(mk.t);
       els.scrubMarks.appendChild(d);
     });
+    // 时间轴缩略条：宽度 = 可见比例，位置 = 窗口起点
+    if (els.zoomView && dur > 0) {
+      els.zoomView.style.width = (viewDur / dur * 100) + "%";
+      els.zoomView.style.left = (viewStart / dur * 100) + "%";
+    }
+    drawWaveform();
   }
 
   // ---------------- 信息显示 ----------------

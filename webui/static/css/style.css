@@ -279,8 +279,8 @@ body {
 
 .player-controls { display: flex; flex-direction: column; gap: 8px; }
 
-/* 第 1 行：进度条 */
-.timeline { display: flex; align-items: center; gap: 12px; }
+/* 第 1 行：进度条（波形叠加）+ 时间轴水平滚动条 */
+.timeline { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 /* 第 2 行：播放控制 + 标记 + 帧信息 */
 .transport { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
@@ -298,13 +298,17 @@ body {
 .ctl.primary:hover { background: #3d7ae8; }
 
 .scrubber {
-  position: relative; flex: 1; height: 26px;
+  position: relative; width: 100%; height: 40px;
   background: var(--bg-soft); border: 1px solid var(--border); border-radius: 7px;
-  cursor: pointer; overflow: hidden;
+  cursor: pointer; overflow: hidden; user-select: none;
+}
+.scrub-wave {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
 }
 .scrub-fill {
   position: absolute; left: 0; top: 0; bottom: 0;
-  background: rgba(79,140,255,0.28); pointer-events: none;
+  background: rgba(79,140,255,0.22); pointer-events: none;
 }
 .scrub-thumb {
   position: absolute; top: 3px; bottom: 3px; width: 14px;
@@ -317,6 +321,19 @@ body {
 .scrub-mark.detected { background: var(--ok); }
 .scrub-mark.captured { background: var(--warn); }
 .scrub-mark.end { background: var(--accent); }
+
+/* 时间轴可见范围水平滚动条（比例缩略条） */
+.zoom-scroll {
+  position: relative; height: 10px; width: 100%; flex-shrink: 0;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px;
+  cursor: pointer; user-select: none; touch-action: none; overflow: hidden;
+}
+.zoom-view {
+  position: absolute; top: 1px; bottom: 1px; left: 1px;
+  background: rgba(79,140,255,0.5); border-radius: 3px;
+  cursor: grab;
+}
+.zoom-view:active { cursor: grabbing; }
 .meta-line #timecode { font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
 /* 第 3 行：起点徽标 + 视频元数据 */
@@ -482,7 +499,6 @@ input[type="number"] {
   .player-controls, .meta-line { gap: 6px; }
 }
 @media (max-width: 600px) {
-  .timeline input[type="range"] { width: 80px; }
   .transport { flex-wrap: wrap; }
   .transport .spacer { display: none; }
   #timecode { width: 100%; text-align: right; }

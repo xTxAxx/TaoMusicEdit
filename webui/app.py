@@ -14,10 +14,12 @@
 """
 from __future__ import annotations
 
+import array
 import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -44,6 +46,7 @@ from detector.core.errors import DetectorError  # noqa: E402
 from detector.utils.ffmpeg import probe_video, read_frame  # noqa: E402
 from trimmer import OutputMode, Trimmer, TrimmerConfig  # noqa: E402
 from trimmer.core.errors import TrimmerError  # noqa: E402
+from trimmer.core.ffmpeg import find_ffmpeg  # noqa: E402
 from trimmer.core.probe import probe as trimmer_probe  # noqa: E402
 from trimmer.utils.validation import validate_frame, validate_timestamp  # noqa: E402
 
@@ -74,6 +77,8 @@ SKIP_DIRS = {
     ".venv", "venv", ".idea", ".vscode", "dist", "build", ".trae",
 }
 FRAME_CACHE_MAX = 120
+#: 音频波峰窗口缓存上限（LRU），按 (path, start, end, buckets) 键控
+WAVE_CACHE_MAX = 64
 
 #: 启动时从配置文件恢复上次的工作区 / 输出目录；未保存或路径失效时回退到项目根目录
 _SAVED = settings_mod.load()
@@ -85,6 +90,7 @@ STATE = {
 }
 _probe_cache: dict = {}
 _frame_cache: dict = {}
+_wave_cache: dict = {}
 _cache_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -375,6 +381,83 @@ def _get_frame_jpeg(path: str, t: float):
     return data
 
 
+def _waveform_peaks(path: str, start: float, end: float, buckets: int):
+    """用 ffmpeg 解码 ``[start, end]`` 区间的音频为 f32le 单声道，聚合每桶 min/max。
+
+    采样率按桶数自适应（每桶约 4 个样本），控制解码开销：
+    - 概览（整段）采样率低，样本量小；
+    - 深缩放的短窗口采样率高，保证波峰分辨率。
+
+    返回: ``[[min, max], ...]``（长度 buckets，取值 [-1, 1]）；
+    解码失败或无音轨时返回 ``None``。
+    """
+    span = max(0.001, end - start)
+    sr = max(1000, min(48000, int(4 * buckets / span) + 1))
+    try:
+        ffmpeg = find_ffmpeg()
+    except TrimmerError:
+        return None
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-ss", f"{start:.6f}", "-i", path,
+        "-t", f"{span:.6f}",
+        "-map", "0:a:0", "-vn", "-ac", "1", "-ar", str(sr),
+        "-f", "f32le", "-",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            bufsize=1 << 16,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    buf = array.array("f")
+    try:
+        while True:
+            chunk = proc.stdout.read(1 << 16)
+            if not chunk:
+                break
+            buf.frombytes(chunk)
+        proc.stdout.close()
+    except Exception:
+        # 读取异常：终止进程并释放管道，避免挂起
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        return None
+    return_code = proc.wait()
+    if return_code != 0 or not buf:
+        return None
+
+    lo = [1.0] * buckets
+    hi = [-1.0] * buckets
+    scale = buckets / (sr * span)
+    for i, v in enumerate(buf):
+        b = int(i * scale)
+        if b >= buckets:
+            break
+        if v < lo[b]:
+            lo[b] = v
+        if v > hi[b]:
+            hi[b] = v
+    peaks = []
+    for i in range(buckets):
+        if hi[i] < lo[i]:
+            peaks.append([0.0, 0.0])  # 空桶（时长不足或解码边界）
+        else:
+            peaks.append([round(lo[i], 4), round(hi[i], 4)])
+    return peaks
+
+
 # ---------------------------------------------------------------------------
 # 页面
 # ---------------------------------------------------------------------------
@@ -637,6 +720,66 @@ def api_frame():
     if data is None:
         return jsonify({"ok": False, "message": "无法提取该时间戳的帧"}), 422
     resp = Response(data, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
+@app.route("/api/waveform")
+def api_waveform():
+    """返回音频波峰（每桶 min/max），供前端进度条波形叠加。
+
+    参数:
+        path: 视频绝对路径。
+        start/end: 时间窗口（秒），默认整段。
+        buckets: 波峰桶数（16~8000），约等于画布像素宽 × 2。
+    """
+    path = request.args.get("path", "")
+    if not path or not os.path.isfile(path):
+        return jsonify({"ok": False, "message": "文件不存在"}), 404
+    try:
+        start = max(0.0, float(request.args.get("start", 0)))
+        buckets = int(request.args.get("buckets", 1000))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "参数非法"}), 400
+    buckets = max(16, min(buckets, 8000))
+    try:
+        info = _video_info(path)
+    except DetectorError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    end = info.duration
+    raw_end = request.args.get("end")
+    if raw_end:
+        try:
+            end = float(raw_end)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "message": "参数非法"}), 400
+    end = max(start + 0.001, min(end, info.duration))
+
+    key = (path, round(start, 2), round(end, 2), buckets)
+    with _cache_lock:
+        hit = _wave_cache.get(key)
+        if hit is not None:
+            _wave_cache[key] = hit  # 刷新 LRU 位置
+    if hit is None:
+        hit = _waveform_peaks(path, start, end, buckets)
+        if hit is not None:
+            with _cache_lock:
+                _wave_cache[key] = hit
+                if len(_wave_cache) > WAVE_CACHE_MAX:
+                    try:
+                        _wave_cache.pop(next(iter(_wave_cache)))
+                    except StopIteration:
+                        pass
+
+    if hit is None:
+        # 解码失败通常意味着无音轨；前端据此降级为纯进度条
+        resp = jsonify({"ok": True, "has_audio": False, "peaks": [],
+                        "duration": info.duration, "start": start, "end": end,
+                        "buckets": buckets})
+    else:
+        resp = jsonify({"ok": True, "has_audio": True, "peaks": hit,
+                        "duration": info.duration, "start": start, "end": end,
+                        "buckets": buckets})
     resp.headers["Cache-Control"] = "private, max-age=3600"
     return resp
 
