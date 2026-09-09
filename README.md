@@ -30,50 +30,59 @@
 - **设置持久化**：工作区、输出目录及全部参数自动保存到配置文件，重启后自动恢复；
   裁剪起点 / 终点（start_mode / start_value / end_mode / end_value）因视频而异，
   不随配置保存，启动时默认留空；侧边栏底部提供「恢复默认设置」按钮一键还原。
-- **检测结果缓存**：检测结果持久化到本地 SQLite（`webui/detect_cache.db`），
+- **检测结果缓存**：检测结果持久化到本地 SQLite（`src/webui/detect_cache.db`），
   刷新页面 / 重启服务后自动匹配，无需重新检测；支持开关、条目上限、
   清理失效条目与清空缓存。
 - **结果可视化**：检测点标注、目标帧定位、裁剪产物列表。
 
 ### detector（视频颜色检测）
 基于「反向跳帧 + 局部细化」算法，在视频前 N 秒内定位四个指定位置颜色匹配的**结尾帧**，
-全程仅解码约 40~50 帧，不整片解码。详细说明见 [detector/README.md](detector/README.md)。
+全程仅解码约 40~50 帧，不整片解码。详细说明见 [detector/README.md](src/detector/README.md)。
 
 ### trimmer（高精度视频裁剪）
 基于 FFmpeg，支持按**帧序号**或**时间戳**指定保留起点，并可选指定终点（**区间裁剪**，
 保留 `[起点, 终点)` 区间；终点缺省时保留到片尾），默认流复制快速裁剪，可选重编码与 GPU 加速，
-支持完整视频 / 无声视频 / 纯音频 / 分离音视频四种输出模式。详细说明见 [trimmer/README.md](trimmer/README.md)。
+支持完整视频 / 无声视频 / 纯音频 / 分离音视频四种输出模式。详细说明见 [trimmer/README.md](src/trimmer/README.md)。
 
 ---
 
 ## 2. 项目结构
 
+采用行业标准的 **src/ 布局**：三个功能模块（detector / trimmer / webui）统一放在 `src/` 下，
+根目录仅保留启动入口、测试与项目配置。各目录功能定位与文件存放规范详见 [STRUCTURE.md](STRUCTURE.md)。
+
 ```
 TaoMusicEdit/
 ├── run.py                  # ★ 统一启动入口（推荐从这里启动）
-├── detector/               # 视频颜色检测模块（可独立使用）
-│   ├── cli.py / __main__.py# 命令行入口
-│   ├── config.py           # DetectorConfig 全部可调参数
-│   ├── core/               # 核心算法（algorithm/detector/matcher/errors）
-│   ├── utils/              # ffmpeg 抽帧、颜色工具、日志
-│   └── tests/              # 测试
-├── trimmer/                # 视频裁剪模块（可独立使用）
-│   ├── cli.py / __main__.py# 命令行入口
-│   ├── core/               # 核心（trimmer/ffmpeg/probe/errors）
-│   ├── utils/              # 校验、日志
-│   └── tests/              # 测试
-└── webui/                  # Web UI 后端 + 前端
-    ├── app.py              # Flask 主应用（API 路由、任务编排）
-    ├── jobs.py             # 异步任务管理器（后台线程 + SSE + 取消）
-    ├── settings.py         # 设置持久化（读写 webui/settings.json）
-    ├── settings.json       # 运行时生成的配置文件（首次保存后出现）
-    ├── detect_cache.db     # 运行时生成的检测结果缓存（SQLite，可安全删除重建）
-    ├── _vendor/            # 本地 vendored Flask 及其依赖（无需 pip 安装）
-    ├── templates/index.html
-    ├── static/
-    │   ├── css/style.css
-    │   └── js/  (params.js / player.js / app.js)
-    └── requirements.txt
+├── pytest.ini              # pytest 配置（testpaths / pythonpath=src）
+├── STRUCTURE.md            # 目录结构与文件存放规范说明
+├── src/                    # 全部源码包
+│   ├── detector/           # 视频颜色检测模块（可独立使用）
+│   │   ├── cli.py / __main__.py  # 命令行入口
+│   │   ├── config.py       # DetectorConfig 全部可调参数
+│   │   ├── core/           # 核心算法（algorithm/detector/matcher/errors）
+│   │   ├── utils/          # ffmpeg 抽帧、颜色工具、日志
+│   │   ├── examples/       # API 使用示例
+│   │   └── tests/          # 测试
+│   ├── trimmer/            # 视频裁剪模块（可独立使用）
+│   │   ├── cli.py / __main__.py  # 命令行入口
+│   │   ├── pyproject.toml  # 独立打包配置
+│   │   ├── core/           # 核心（trimmer/ffmpeg/probe/errors）
+│   │   ├── utils/          # 校验、日志
+│   │   ├── examples/       # API 使用示例
+│   │   └── tests/          # 测试
+│   └── webui/              # Web UI 后端 + 前端
+│       ├── __init__.py     # 包标记（webui 作为包导入）
+│       ├── app.py          # Flask 主应用（API 路由、任务编排）
+│       ├── jobs.py         # 异步任务管理器（后台线程 + SSE + 取消）
+│       ├── settings.py     # 设置持久化（读写 src/webui/settings.json）
+│       ├── requirements.txt
+│       ├── templates/index.html
+│       ├── static/
+│       │   ├── css/style.css
+│       │   └── js/  (params.js / player.js / app.js)
+│       └── _vendor/        # 本地 vendored Flask 及其依赖（运行期生成，可重建）
+└── *.mp4                   # 测试 / 演示用视频素材（不提交）
 ```
 
 ---
@@ -84,11 +93,11 @@ TaoMusicEdit/
 - [FFmpeg](https://ffmpeg.org/)（含 `ffmpeg` 与 `ffprobe`，已加入 PATH）
 - Python 依赖：
   - `opencv-python`、`numpy`（detector 使用）
-  - `flask`（Web UI 使用，已本地化到 `webui/_vendor`，无需额外安装）
+  - `flask`（Web UI 使用，已本地化到 `src/webui/_vendor`，无需额外安装）
 
 ```bash
 pip install opencv-python numpy
-# 如需重新安装本地 Flask：py -m pip install -r webui/requirements.txt
+# 如需重新安装本地 Flask：py -m pip install -r src/webui/requirements.txt
 ```
 
 ---
@@ -110,7 +119,7 @@ python run.py        # 或 py run.py
 | `WEBUI_HOST` | `127.0.0.1` | 监听地址 |
 | `WEBUI_PORT` | `8765` | 监听端口 |
 
-> 也可直接运行 `py webui\app.py`，效果等同。
+> 也可直接运行 `py src\webui\app.py`，效果等同。
 
 ---
 
@@ -150,7 +159,7 @@ python run.py        # 或 py run.py
 
 ### 参数说明
 
-**Detector**（详见 [detector/README.md](detector/README.md)）
+**Detector**（详见 [detector/README.md](src/detector/README.md)）
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -166,7 +175,7 @@ python run.py        # 或 py run.py
 | 帧提取器 | `ffmpeg` | `ffmpeg`（精确）/ `opencv`（回退） |
 | GPU 硬解 | `自动` | 解码加速：自动 / 关闭 / d3d11va / dxva2 / cuda / qsv；后端不可用自动回退 CPU 软解 |
 
-**Trimmer**（详见 [trimmer/README.md](trimmer/README.md)）
+**Trimmer**（详见 [trimmer/README.md](src/trimmer/README.md)）
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -185,7 +194,7 @@ python run.py        # 或 py run.py
 
 ## 6. 配置持久化
 
-- 配置文件：`webui/settings.json`（首次保存设置后自动生成）。
+- 配置文件：`src/webui/settings.json`（首次保存设置后自动生成）。
 - 保存内容：工作区路径、输出目录、detector 全部参数、trimmer 全部参数
   （裁剪起点 / 终点因视频而异，不参与持久化，启动时默认留空 / 无终点）。
 - 保存时机：任意参数变化、工作区/输出目录变化后 **自动防抖保存**（约 400ms）；
@@ -208,7 +217,7 @@ python run.py        # 或 py run.py
 
 ### 检测结果缓存（detect_cache）
 
-- 数据文件：`webui/detect_cache.db`（SQLite，WAL 模式），单次 Detect 与批量 Detect 完成后自动写入。
+- 数据文件：`src/webui/detect_cache.db`（SQLite，WAL 模式），单次 Detect 与批量 Detect 完成后自动写入。
 - 有效性校验：按文件 mtime + 大小判断，源文件被修改或删除后缓存自动视为失效，不会返回过期结果。
 - 自动复用：刷新页面 / 重启服务后，选中视频会自动匹配缓存中的检测结果并填入裁剪起点，
   无需重新检测；「批量裁剪」也会直接复用这些结果。
@@ -224,8 +233,11 @@ python run.py        # 或 py run.py
 ### detector
 
 ```bash
-py detector\cli.py input1.mp4
+# 直接运行（推荐，无需安装）
+py src\detector\cli.py input1.mp4
 # 输出: frame=734 time=24.466666666666665
+py src\detector\cli.py input1.mp4 --target '#F7F10F' --threshold 0.9
+# 模块方式运行（需在 src 目录下执行，或设置 PYTHONPATH=src）
 py -m detector input1.mp4 --target '#F7F10F' --threshold 0.9
 ```
 
@@ -238,10 +250,13 @@ print(frame, time)
 ### trimmer
 
 ```bash
-py trimmer\cli.py input1.mp4 -f 735 -o out.mp4 -y
-py -m trimmer input1.mp4 -t 24.5 -r --hw-accel auto
+# 直接运行（推荐，无需安装）
+py src\trimmer\cli.py input1.mp4 -f 735 -o out.mp4 -y
+py src\trimmer\cli.py input1.mp4 -t 24.5 -r --hw-accel auto
 # 区间裁剪：保留 [24.5s, 3600s)
-py -m trimmer input1.mp4 -t 24.5 -T 3600
+py src\trimmer\cli.py input1.mp4 -t 24.5 -T 3600
+# 模块方式运行（需在 src 目录下执行，或设置 PYTHONPATH=src）
+py -m trimmer input1.mp4 -t 24.5 -r --hw-accel auto
 ```
 
 ```python

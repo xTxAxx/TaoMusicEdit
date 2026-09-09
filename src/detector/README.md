@@ -36,11 +36,13 @@ pip install pytest
 
 ### 2.2 目录结构
 
+模块位于 `src/detector/`（src 布局）：
+
 ```
 detector/
 ├── __init__.py            # 模块公共接口（VideoColorDetector、异常、颜色工具等）
-├── __main__.py            # `py -m detector <视频>` 命令行入口（无需安装）
-├── cli.py                 # 命令行入口（py detector/cli.py <视频>）
+├── __main__.py            # `py -m detector <视频>` 命令行入口（需在 src 下运行或 PYTHONPATH=src）
+├── cli.py                 # 命令行入口（py src\detector\cli.py <视频>）
 ├── config.py              # DetectorConfig：全部可配置参数
 ├── core/                  # 核心检测算法
 │   ├── algorithm.py       # 反向跳帧 + 局部细化（纯逻辑，可独立测试）
@@ -64,7 +66,7 @@ detector/
 从其他项目直接调用，只传入视频文件路径即可得到 `frame` 和 `time`：
 
 ```bash
-py detector\cli.py video.mp4
+py src\detector\cli.py video.mp4
 # 输出: frame=734 time=24.466666666666665
 ```
 
@@ -74,17 +76,17 @@ py detector\cli.py video.mp4
 常用选项：
 
 ```bash
-py detector\cli.py video.mp4 --target '#F7F10F'   # 指定目标颜色（#RRGGBB 或 R,G,B）
-py detector\cli.py video.mp4 --threshold 0.9      # 置信度阈值
-py detector\cli.py video.mp4 --tolerance 15       # 颜色容差
-py detector\cli.py video.mp4 --points 20,20 300,300  # 自定义检测点（数量=坐标个数）
-py detector\cli.py video.mp4 --points 100,100 --no-scale-points  # 关闭坐标缩放
-py detector\cli.py video.mp4 --detail             # 详细诊断（写入 stderr）
-py detector\cli.py video.mp4 --extractor opencv   # 使用 OpenCV 提取器
-py detector\cli.py video.mp4 --log-level DEBUG    # 调整日志级别（默认 WARNING，日志写入 stderr）
+py src\detector\cli.py video.mp4 --target '#F7F10F'   # 指定目标颜色（#RRGGBB 或 R,G,B）
+py src\detector\cli.py video.mp4 --threshold 0.9      # 置信度阈值
+py src\detector\cli.py video.mp4 --tolerance 15       # 颜色容差
+py src\detector\cli.py video.mp4 --points 20,20 300,300  # 自定义检测点（数量=坐标个数）
+py src\detector\cli.py video.mp4 --points 100,100 --no-scale-points  # 关闭坐标缩放
+py src\detector\cli.py video.mp4 --detail             # 详细诊断（写入 stderr）
+py src\detector\cli.py video.mp4 --extractor opencv   # 使用 OpenCV 提取器
+py src\detector\cli.py video.mp4 --log-level DEBUG    # 调整日志级别（默认 WARNING，日志写入 stderr）
 ```
 
-等价的模块入口（无需安装，在项目根目录下运行）：
+等价的模块入口（无需安装；需在 src 目录下执行，或设置 `PYTHONPATH=src`）：
 
 ```bash
 py -m detector video.mp4
@@ -120,8 +122,8 @@ if result.detected:
 运行示例脚本（项目根目录下）：
 
 ```bash
-py detector\examples\usage_example.py            # 使用默认视频 input1.mp4
-py detector\examples\usage_example.py input2.mp4 # 指定视频
+py src\detector\examples\usage_example.py            # 使用默认视频 input1.mp4
+py src\detector\examples\usage_example.py input2.mp4 # 指定视频
 ```
 
 运行测试：

@@ -49,13 +49,13 @@ trimmer/
 方式一：直接使用（无需安装）
 
 ```bash
-python -m trimmer --help          # 在仓库根目录下执行
+python -m trimmer --help          # 在 src 目录下执行（或设置 PYTHONPATH=src）
 ```
 
 方式二：pip 安装（可被其他项目 import）
 
 ```bash
-pip install ./trimmer
+pip install ./src/trimmer
 trimmer --help                    # 安装后获得 trimmer 命令
 ```
 
@@ -192,7 +192,7 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0, end_timestamp=60.0,
 二选一、均可缺省（缺省 = 保留到片尾）；`TrimmerResult` 相应提供
 `end_timestamp` / `end_frame` 与按 `end - start` 计算的 `cut_duration`。
 
-更完整的示例见 `trimmer/examples/usage_example.py`。
+更完整的示例见 `src/trimmer/examples/usage_example.py`。
 
 ## 错误码
 
@@ -229,10 +229,10 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0, end_timestamp=60.0,
 ## 测试
 
 ```bash
-python -m pytest trimmer/tests -q
+python -m pytest src/trimmer/tests -q
 ```
 
-共 **106 个测试全部通过**（`python -m pytest trimmer/tests -q`）。
+共 **106 个测试全部通过**（`python -m pytest src/trimmer/tests -q`）。
 
 包含单元测试（校验、CLI 解析、命令构建含区间 `-to` / `-t` 回退分支、输出路径）
 与集成测试（生成 10 秒测试视频，验证时间戳/帧序号/区间裁剪时长/纯音频/无声/分离/
