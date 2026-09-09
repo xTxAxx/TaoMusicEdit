@@ -49,10 +49,6 @@ const Player = (function () {
     els.btnPlay.addEventListener("click", togglePlay);
     els.btnPrev.addEventListener("click", () => stepFrames(-1));
     els.btnNext.addEventListener("click", () => stepFrames(1));
-    els.volume.addEventListener("input", () => {
-      els.video.volume = parseFloat(els.volume.value) || 0;
-      els.video.muted = els.video.volume === 0;
-    });
     els.markerToggle.addEventListener("change", () => {
       markerVisible = els.markerToggle.checked;
       render();

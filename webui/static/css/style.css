@@ -279,10 +279,8 @@ body {
 
 .player-controls { display: flex; flex-direction: column; gap: 8px; }
 
-/* 第 1 行：进度条 + 分隔线 + 音量条 */
+/* 第 1 行：进度条 */
 .timeline { display: flex; align-items: center; gap: 12px; }
-.timeline .tl-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
-.timeline input[type="range"] { width: 120px; flex-shrink: 0; accent-color: var(--accent); }
 
 /* 第 2 行：播放控制 + 标记 + 帧信息 */
 .transport { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
