@@ -32,7 +32,9 @@ const Player = (function () {
   let waveReqToken = 0;       // 窗口请求令牌（防止过期响应覆盖当前视图）
   let waveTimer = null;       // 窗口请求防抖定时器
 
-  const ZOOM_STEP = 1.15;     // 滚轮每格缩放倍数
+  const ZOOM_STEP = 1.15;      // 滚轮每格缩放倍数
+  const WHEEL_PAN_RATIO = 0.08; // 普通滚轮每格平移量 = 可见窗口的 8%
+  const ZOOM_VIEW_MIN = 40;    // 缩略条最小宽度（px），防止缩得过小而难以操作
   const WAVE_BUCKETS = 2000;  // 概览波峰桶数
   const WAVE_CACHE_MAX = 24;  // 窗口波峰缓存条数（LRU）
 
@@ -540,6 +542,16 @@ const Player = (function () {
     afterViewChange();
   }
 
+  // 缩略条实际渲染尺寸：宽度受最小宽度限制，左侧位置相应钳制，避免溢出轨道
+  function zoomViewMetrics() {
+    const dur = info ? info.duration : 0;
+    const trackW = els.zoomScroll.clientWidth || 1;
+    const rawW = dur > 0 ? Math.max(ZOOM_VIEW_MIN, (viewDur / dur) * trackW) : trackW;
+    const rawLeft = dur > 0 ? (viewStart / dur) * trackW : 0;
+    const left = Math.max(0, Math.min(rawLeft, trackW - rawW));
+    return { trackW, rawW, left };
+  }
+
   function afterViewChange() {
     updateHud();
     render();
@@ -618,10 +630,10 @@ const Player = (function () {
       if (ev.target === els.zoomView) {
         zoomDragging = true;
         els.zoomScroll.setPointerCapture(ev.pointerId);
-        zoomDragOffset = ev.clientX - rect.left - (viewStart / dur) * rect.width;
+        zoomDragOffset = ev.clientX - rect.left - zoomViewMetrics().left;
       } else {
         const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-        viewStart = ratio * (dur - viewDur) - viewDur / 2;
+        viewStart = ratio * dur - viewDur / 2;   // 视图中心对齐到点击时间
         viewStart = Math.max(0, Math.min(viewStart, dur - viewDur));
         afterViewChange();
       }
@@ -630,9 +642,14 @@ const Player = (function () {
       if (!zoomDragging) return;
       const dur = info.duration;
       const rect = els.zoomScroll.getBoundingClientRect();
-      const ratio = (ev.clientX - rect.left - zoomDragOffset) / rect.width;
-      viewStart = ratio * (dur - viewDur);
-      viewStart = Math.max(0, Math.min(viewStart, dur - viewDur));
+      const m = zoomViewMetrics();
+      const movable = rect.width - m.rawW;
+      if (movable <= 0) {
+        viewStart = 0;
+      } else {
+        const left = Math.max(0, Math.min(ev.clientX - rect.left - zoomDragOffset, movable));
+        viewStart = (left / movable) * (dur - viewDur);
+      }
       afterViewChange();
     });
     const endDrag = () => { zoomDragging = false; };
@@ -640,16 +657,26 @@ const Player = (function () {
     els.zoomScroll.addEventListener("pointercancel", endDrag);
   }
 
-  // 进度条悬停时：Ctrl + 滚轮缩放时间轴；双击恢复全览
+  // 进度条 / 水平滚动条滚轮交互（模拟专业剪辑软件的时间轴操作）：
+  //   普通滚轮：平移可见窗口；Ctrl / Cmd + 滚轮：以指针位置为锚点缩放
+  // 进度条双击恢复全览
   function initScrubZoom() {
-    els.scrubber.addEventListener("wheel", (ev) => {
-      if (!info) return;
-      if (!ev.ctrlKey && !ev.metaKey) return;  // 未按住 Ctrl 不拦截
-      ev.preventDefault();                     // 阻止浏览器页面缩放
-      const rect = els.scrubber.getBoundingClientRect();
-      const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
-      zoomAt(x, ev.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-    }, { passive: false });
+    const onWheel = (ev, target) => {
+      if (!info || viewDur <= 0) return;
+      ev.preventDefault();  // 阻止页面滚动 / 浏览器页面缩放
+      if (ev.ctrlKey || ev.metaKey) {
+        const rect = target.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+        zoomAt(x, ev.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+      } else {
+        let dy = ev.deltaY;
+        if (ev.deltaMode === 1) dy *= 33;        // 行模式 → 像素当量
+        else if (ev.deltaMode === 2) dy *= 100;  // 页模式 → 像素当量
+        panTo(viewStart + viewDur * WHEEL_PAN_RATIO * (dy / 100));
+      }
+    };
+    els.scrubber.addEventListener("wheel", (ev) => onWheel(ev, els.scrubber), { passive: false });
+    els.zoomScroll.addEventListener("wheel", (ev) => onWheel(ev, els.zoomScroll), { passive: false });
     els.scrubber.addEventListener("dblclick", () => resetView());
   }
 
@@ -739,7 +766,7 @@ const Player = (function () {
       ? Math.max(0, Math.min(100, ((currentTime - viewStart) / viewDur) * 100))
       : 0;
     els.scrubFill.style.width = pct + "%";
-    els.scrubThumb.style.left = "calc(" + pct + "% - 7px)";
+    els.scrubThumb.style.left = "calc(" + pct + "% - 1.5px)";
     els.scrubMarks.innerHTML = "";
     const marks = [];
     if (detectedMark && dur > 0) marks.push({ t: detectedMark.time, cls: "detected", label: "检测帧" });
@@ -754,10 +781,11 @@ const Player = (function () {
       d.title = mk.label + " @ " + formatTime(mk.t);
       els.scrubMarks.appendChild(d);
     });
-    // 时间轴缩略条：宽度 = 可见比例，位置 = 窗口起点
+    // 时间轴缩略条：宽度 = 可见比例（不低于最小宽度），位置 = 窗口起点
     if (els.zoomView && dur > 0) {
-      els.zoomView.style.width = (viewDur / dur * 100) + "%";
-      els.zoomView.style.left = (viewStart / dur * 100) + "%";
+      const m = zoomViewMetrics();
+      els.zoomView.style.width = m.rawW + "px";
+      els.zoomView.style.left = m.left + "px";
     }
     drawWaveform();
   }

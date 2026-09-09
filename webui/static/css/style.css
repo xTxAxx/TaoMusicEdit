@@ -311,8 +311,8 @@ body {
   background: rgba(79,140,255,0.22); pointer-events: none;
 }
 .scrub-thumb {
-  position: absolute; top: 3px; bottom: 3px; width: 14px;
-  background: var(--accent); border-radius: 4px; pointer-events: none;
+  position: absolute; top: 2px; bottom: 2px; width: 3px;
+  background: var(--accent); border-radius: 2px; pointer-events: none;
 }
 .scrub-marks { position: absolute; inset: 0; pointer-events: none; }
 .scrub-mark {
@@ -320,12 +320,12 @@ body {
 }
 .scrub-mark.detected { background: var(--ok); }
 .scrub-mark.captured { background: var(--warn); }
-.scrub-mark.end { background: var(--accent); }
+.scrub-mark.end { background: var(--bad); }
 
-/* 时间轴可见范围水平滚动条（比例缩略条） */
+/* 时间轴可见范围水平滚动条（比例缩略条）：加宽轨道便于鼠标捕捉与拖动 */
 .zoom-scroll {
-  position: relative; height: 10px; width: 100%; flex-shrink: 0;
-  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px;
+  position: relative; height: 16px; width: 100%; flex-shrink: 0;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 7px;
   cursor: pointer; user-select: none; touch-action: none; overflow: hidden;
 }
 .zoom-view {
@@ -350,14 +350,14 @@ body {
 }
 .start-badge.on { display: inline-block; }
 .start-badge.on:hover { background: rgba(243,156,18,0.12); }
-/* 终点徽标：颜色区别于起点（--warn）/ 检测标记（--ok），点击可清除终点 */
+/* 终点徽标：颜色为红色（与终点标记一致），区别于起点（--warn）/ 检测标记（--ok），点击可清除终点 */
 .end-badge {
-  color: var(--accent); font-family: var(--mono);
-  border: 1px solid rgba(79,140,255,0.5); border-radius: 6px; padding: 2px 8px;
+  color: var(--bad); font-family: var(--mono);
+  border: 1px solid rgba(231,76,60,0.5); border-radius: 6px; padding: 2px 8px;
   display: none; cursor: pointer;
 }
 .end-badge.on { display: inline-block; }
-.end-badge.on:hover { background: rgba(79,140,255,0.12); }
+.end-badge.on:hover { background: rgba(231,76,60,0.12); }
 
 /* ---------------- 参数面板 ---------------- */
 .panels {
