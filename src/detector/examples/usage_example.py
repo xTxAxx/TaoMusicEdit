@@ -3,12 +3,12 @@
 
 运行方式（在项目根目录）::
 
-    py examples/usage_example.py
+    py src\\detector\\examples\\usage_example.py
 """
 import os
 import sys
 
-# 保证可独立运行：将项目根目录加入模块搜索路径
+# 保证可独立运行：将 src 目录加入模块搜索路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from detector import DetectorConfig, VideoColorDetector, hex_to_rgb

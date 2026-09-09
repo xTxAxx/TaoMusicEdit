@@ -2,22 +2,22 @@
 """trimmer Python API 使用示例。
 
 运行方式（在仓库根目录执行）:
-    python trimmer/examples/usage_example.py
+    python src/trimmer/examples/usage_example.py
 """
 
 import os
 import sys
 
-# 将仓库根目录加入 sys.path，便于直接运行本示例（无需先安装）
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# 将 src 目录加入 sys.path，便于直接运行本示例（无需先安装）
+_SRC = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 from trimmer import OutputMode, Trimmer, TrimmerConfig
 from trimmer.core.errors import TrimmerError
 
 # 自动定位仓库根目录下的测试视频
-_CANDIDATES = ["input1.mp4", "../input1.mp4", "../../input1.mp4"]
+_CANDIDATES = ["input1.mp4", "../input1.mp4", "../../input1.mp4", "../../../input1.mp4"]
 _VIDEO = next((p for p in _CANDIDATES if os.path.isfile(p)), None)
 # 示例输出统一放到本目录的 output 文件夹，避免污染仓库根目录
 _OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")

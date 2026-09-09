@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pytest
 
-# 项目根目录（d:\Git\TaoMusicEdit）
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 项目根目录（d:\Git\TaoMusicEdit）：src/detector/tests 向上第 4 层
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 REAL_VIDEOS: Dict[str, str] = {
     "input1": os.path.join(PROJECT_ROOT, "input1.mp4"),
     "input2": os.path.join(PROJECT_ROOT, "input2.mp4"),

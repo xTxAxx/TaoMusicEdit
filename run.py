@@ -18,12 +18,12 @@ import os
 import sys
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
-_WEBUI = os.path.join(_ROOT, "webui")
-# 让 webui 目录可被导入；webui/app.py 会自行把项目根目录与本地 vendored flask 加入 sys.path
-if _WEBUI not in sys.path:
-    sys.path.insert(0, _WEBUI)
+_SRC = os.path.join(_ROOT, "src")
+# 让 src 目录可被导入；webui/app.py 会自行把 src 与本地 vendored flask 加入 sys.path
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
-from app import STATE, app  # noqa: E402  (webui/app.py)
+from webui.app import STATE, app  # noqa: E402  (src/webui/app.py)
 
 
 def main() -> None:

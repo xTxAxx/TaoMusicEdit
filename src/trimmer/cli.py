@@ -8,12 +8,12 @@ import os
 import sys
 from typing import List, Optional
 
-# 允许直接以脚本方式运行（如 `py .\trimmer\cli.py`）时也能导入本包：
+# 允许直接以脚本方式运行（如 `py .\src\trimmer\cli.py`）时也能导入本包：
 # 以模块方式运行时 __package__ 非空，无需此引导
 if __package__ in (None, ""):
-    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if _REPO_ROOT not in sys.path:
-        sys.path.insert(0, _REPO_ROOT)
+    _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _SRC not in sys.path:
+        sys.path.insert(0, _SRC)
 
 from trimmer import __version__
 from trimmer.core.errors import TrimmerError

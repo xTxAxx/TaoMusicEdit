@@ -25,7 +25,7 @@ import os
 import sys
 from typing import List, Optional
 
-# 保证可直接运行 `py detector/cli.py`：将项目根目录（detector 包所在处）加入模块搜索路径
+# 保证可直接运行 `py src\detector\cli.py`：将 src 目录（detector 包所在处）加入模块搜索路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from detector import VideoColorDetector, hex_to_rgb

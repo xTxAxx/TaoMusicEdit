@@ -12,12 +12,13 @@ import sys
 
 import pytest
 
-_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _p in (_BASE, os.path.join(_BASE, "_vendor")):
+_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/webui
+_SRC = os.path.dirname(_BASE)  # src
+for _p in (_SRC, _BASE, os.path.join(_BASE, "_vendor")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import app as webui_app  # noqa: E402
+from webui import app as webui_app  # noqa: E402
 from trimmer.core.probe import AudioStream, MediaInfo, VideoStream  # noqa: E402
 
 

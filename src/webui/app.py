@@ -10,7 +10,7 @@
 运行方式（项目根目录）::
 
     python run.py          # 统一入口（推荐）
-    py webui\\app.py       # 也可直接运行本文件
+    py src\\webui\\app.py  # 也可直接运行本文件
 """
 from __future__ import annotations
 
@@ -24,10 +24,11 @@ import sys
 import threading
 import time
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
-_REPO = os.path.dirname(_BASE)
-# 保证可导入 detector / trimmer（项目根目录）与本地 vendored flask
-for _p in (_REPO, os.path.join(_BASE, "_vendor")):
+_BASE = os.path.dirname(os.path.abspath(__file__))   # src/webui
+_SRC = os.path.dirname(_BASE)                         # src
+_PROJECT_ROOT = os.path.dirname(_SRC)                 # 项目根目录
+# 保证可导入 detector / trimmer（src 目录）与本地 vendored flask
+for _p in (_SRC, os.path.join(_BASE, "_vendor")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -50,9 +51,9 @@ from trimmer.core.ffmpeg import find_ffmpeg  # noqa: E402
 from trimmer.core.probe import probe as trimmer_probe  # noqa: E402
 from trimmer.utils.validation import validate_frame, validate_timestamp  # noqa: E402
 
-from jobs import JobCancelled, manager, sse_payload  # noqa: E402
+from webui.jobs import JobCancelled, manager, sse_payload  # noqa: E402
 
-import settings as settings_mod  # noqa: E402  (设置持久化)
+from webui import settings as settings_mod  # noqa: E402  (设置持久化)
 
 app = Flask(__name__)
 
@@ -82,8 +83,8 @@ WAVE_CACHE_MAX = 64
 
 #: 启动时从配置文件恢复上次的工作区 / 输出目录；未保存或路径失效时回退到项目根目录
 _SAVED = settings_mod.load()
-_DEFAULT_WS = _REPO
-_DEFAULT_OD = _REPO
+_DEFAULT_WS = _PROJECT_ROOT
+_DEFAULT_OD = _PROJECT_ROOT
 STATE = {
     "workspace": _SAVED.get("workspace") if os.path.isdir(_SAVED.get("workspace") or "") else _DEFAULT_WS,
     "output_dir": _SAVED.get("output_dir") if os.path.isdir(_SAVED.get("output_dir") or "") else _DEFAULT_OD,
@@ -98,7 +99,7 @@ _cache_lock = threading.Lock()
 # 刷新页面 / 重启服务后仍可复用。
 #
 # 设计要点：
-# - 单库文件 webui/detect_cache.db，WAL 模式，写入为单条事务（原子、无写放大）；
+# - 单库文件 src/webui/detect_cache.db，WAL 模式，写入为单条事务（原子、无写放大）；
 # - 主键使用 os.path.normcase 归一化路径（Windows 大小写不敏感），另存原始路径；
 # - 惰性初始化：首次访问时建表，并自动迁移旧版 detect_cache.json。
 # ---------------------------------------------------------------------------
