@@ -77,7 +77,7 @@ TaoMusicEdit/
 1. **新代码入对应功能包**：检测逻辑入 `src/detector/`，裁剪逻辑入 `src/trimmer/`，Web 前后端入 `src/webui/`；禁止在根目录新增业务源码。
 2. **子目录职责固定**：`core/` = 核心实现、`utils/` = 工具函数、`examples/` = 使用示例、`tests/` = 测试；新文件按职责归入对应子目录。
 3. **vendored 依赖仅限 `src/webui/_vendor/`**：任何第三方包不得手工复制到其它位置；需要时通过 requirements.txt 重建。
-4. **运行期产物不入库**：`src/webui/settings.json`（用户设置）、`src/webui/detect_cache.db*`（检测结果缓存 SQLite）、`__pycache__/`、`.pytest_cache/` 等均由 `.gitignore` 忽略，可安全删除重建。
+4. **运行期产物不入库**：`src/webui/settings.json`（用户设置）、`src/webui/detect_cache.db*` / `detect_cache.json*`（检测结果缓存 SQLite 及迁移遗留）、`src/trimmer/examples/output/`（示例脚本运行输出）、`__pycache__/`、`.pytest_cache/`、`*.egg-info/` 等均由 `.gitignore` 忽略，可安全删除重建。
 5. **测试素材不提交**：仓库根目录的 `*.mp4` 测试视频为 git 忽略文件，勿 `git add`。
 
 ## 5. 导入约定

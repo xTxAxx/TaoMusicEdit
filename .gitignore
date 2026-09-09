@@ -38,10 +38,14 @@ src/webui/detect_cache.db-shm
 src/webui/detect_cache.db-wal
 
 # JSON 缓存迁移遗留文件
+src/webui/detect_cache.json
 src/webui/detect_cache.json.migrated
 
 # 运行时用户设置（workspace / 输出目录 / 参数），由 src/webui/settings.py 生成
 src/webui/settings.json
+
+# trimmer 示例脚本运行输出（src/trimmer/examples/usage_example.py 生成）
+src/trimmer/examples/output/
 
 # ============ 测试 / 演示用视频素材（避免提交大体积二进制） ============
 /input1.mp4
