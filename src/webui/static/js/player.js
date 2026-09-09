@@ -31,6 +31,10 @@ const Player = (function () {
   let waveToken = 0;          // 概览请求令牌（防止旧视频响应覆盖新视频）
   let waveReqToken = 0;       // 窗口请求令牌（防止过期响应覆盖当前视图）
   let waveTimer = null;       // 窗口请求防抖定时器
+  let seekRaf = null;         // 拖动时 rAF 句柄（合并 seek，避免 seek 风暴）
+  let pendingSeek = null;     // 待应用的 seek 时间（秒）
+  let waveCacheCanvas = null; // 波形离屏缓存（视口未变时直接复用）
+  let waveCacheKey = null;    // 波形缓存键
 
   const ZOOM_STEP = 1.15;      // 滚轮每格缩放倍数
   const WHEEL_PAN_RATIO = 0.08; // 普通滚轮每格平移量 = 可见窗口的 8%
@@ -136,6 +140,8 @@ const Player = (function () {
     viewDur = 0;
     wave = null;
     waveCache.clear();
+    waveCacheCanvas = null;
+    waveCacheKey = null;
     waveToken++;
     waveReqToken++;
     if (waveTimer) { clearTimeout(waveTimer); waveTimer = null; }
@@ -427,8 +433,13 @@ const Player = (function () {
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
     const rect = contentRect();
-    canvas.width = Math.max(1, Math.round(rect.sw * dpr));
-    canvas.height = Math.max(1, Math.round(rect.sh * dpr));
+    // 画布尺寸未变时不再重建表面（避免每次 render 都重新分配 GPU 纹理）
+    const cw = Math.max(1, Math.round(rect.sw * dpr));
+    const ch = Math.max(1, Math.round(rect.sh * dpr));
+    if (canvas.width !== cw || canvas.height !== ch) {
+      canvas.width = cw;
+      canvas.height = ch;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.sw, rect.sh);
     if (exactImg && exactImg.complete && exactImg.naturalWidth) {
@@ -481,9 +492,16 @@ const Player = (function () {
       // 在可见窗口内换算时间：点击/拖动只在当前视口范围内生效
       const t = xToTime(x);
       currentTime = t;
-      setVideoTime(t);
-      updateHud();
-      render();
+      if (scrubbing) {
+        // 拖动中：UI 即时跟随，视频 seek 合并到下一帧执行（避免每次 pointermove 触发一次解码）
+        scheduleSeek(t);
+        updateHud();
+        renderPlayhead();
+      } else {
+        setVideoTime(t);
+        updateHud();
+        render();
+      }
     };
     els.scrubber.addEventListener("pointerdown", (ev) => {
       scrubbing = true;
@@ -495,9 +513,24 @@ const Player = (function () {
     });
     els.scrubber.addEventListener("pointerup", (ev) => {
       scrubbing = false;
-      setFromEvent(ev);
+      setFromEvent(ev);  // 松开时做一次精确定位
     });
     els.scrubber.addEventListener("pointercancel", () => { scrubbing = false; });
+  }
+
+  // 拖动过程中合并 seek：同一动画帧内只应用最后一次时间；
+  // 若上一跳仍在解码中则跳过本次（pointerup 会兜底精确定位）
+  function scheduleSeek(t) {
+    pendingSeek = t;
+    if (seekRaf) return;
+    seekRaf = requestAnimationFrame(() => {
+      seekRaf = null;
+      if (pendingSeek == null) return;
+      const t2 = pendingSeek;
+      pendingSeek = null;
+      if (els.video.seeking) return;  // 上一次 seek 还在解码，跳过（避免排队堆积）
+      setVideoTime(t2);
+    });
   }
 
   // ---------------- 时间轴视口：缩放 / 平移 / 波形 ----------------
@@ -716,19 +749,29 @@ const Player = (function () {
     ctx.stroke();
   }
 
-  // 将波峰绘制到进度条内的 canvas（时间映射与进度条完全一致）
+  // 将波峰绘制到进度条内的 canvas（时间映射与进度条完全一致）。
+  // 视口/尺寸/数据未变化时直接复用离屏缓存，避免拖动与播放时每帧重算。
   function drawWaveform() {
     const cv = els.scrubWave;
     const W = els.scrubber.clientWidth, H = els.scrubber.clientHeight;
     if (!cv || W <= 0 || H <= 0) return;
     const dpr = window.devicePixelRatio || 1;
+    const data = pickWaveData();
+    const dataKey = data ? data.start + ":" + data.end + ":" + data.peaks.length : "none";
+    const key = viewStart.toFixed(3) + ":" + viewDur.toFixed(3) + ":" + W + ":" + H + ":" + dpr + ":" + dataKey;
+    if (waveCacheKey === key && waveCacheCanvas) {
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(waveCacheCanvas, 0, 0);
+      return;
+    }
     cv.width = Math.max(1, Math.round(W * dpr));
     cv.height = Math.max(1, Math.round(H * dpr));
     const ctx = cv.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     drawRuler(ctx, W, H);
-    const data = pickWaveData();
     if (!data || !data.peaks || !data.peaks.length) return;
     const dataStart = data.start, dataEnd = data.end;
     const dataSpan = dataEnd - dataStart;
@@ -757,9 +800,16 @@ const Player = (function () {
       const yBot = mid - mn * amp;
       ctx.fillRect(x, yTop, 1, Math.max(1, yBot - yTop));
     }
+    // 缓存本次结果（视口不变时直接复用）
+    waveCacheCanvas = document.createElement("canvas");
+    waveCacheCanvas.width = cv.width;
+    waveCacheCanvas.height = cv.height;
+    waveCacheCanvas.getContext("2d").drawImage(cv, 0, 0);
+    waveCacheKey = key;
   }
 
-  function drawScrubber() {
+  // 只更新随播放头变化的动态部分（拖动/播放时高频调用，成本最低）
+  function renderPlayhead() {
     const dur = info ? info.duration : 0;
     // 可见窗口内播放头百分比（越界时钳制到边界）
     const pct = (dur > 0 && viewDur > 0)
@@ -767,6 +817,12 @@ const Player = (function () {
       : 0;
     els.scrubFill.style.width = pct + "%";
     els.scrubThumb.style.left = "calc(" + pct + "% - 1.5px)";
+  }
+
+  function drawScrubber() {
+    const dur = info ? info.duration : 0;
+    renderPlayhead();
+    // 标记与缩略条只随视口变化（视图未变时保持不变，无需每帧重建）
     els.scrubMarks.innerHTML = "";
     const marks = [];
     if (detectedMark && dur > 0) marks.push({ t: detectedMark.time, cls: "detected", label: "检测帧" });
