@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 _BASE = os.path.dirname(os.path.abspath(__file__))   # src/webui
 _SRC = os.path.dirname(_BASE)                         # src
@@ -131,7 +132,8 @@ def _count_detect_cache() -> int:
     """当前缓存条目数。"""
     try:
         db = _get_detect_db()
-        return int(db.execute("SELECT COUNT(*) FROM detect_cache").fetchone()[0])
+        with _detect_cache_lock:
+            return int(db.execute("SELECT COUNT(*) FROM detect_cache").fetchone()[0])
     except sqlite3.Error:
         return 0
 
@@ -239,10 +241,11 @@ def get_cached_detect_result(path: str) -> dict | None:
     abs_path = os.path.abspath(path)
     try:
         db = _get_detect_db()
-        row = db.execute(
-            "SELECT orig_path, mtime, size, result FROM detect_cache WHERE key=?",
-            (_norm_key(abs_path),),
-        ).fetchone()
+        with _detect_cache_lock:
+            row = db.execute(
+                "SELECT orig_path, mtime, size, result FROM detect_cache WHERE key=?",
+                (_norm_key(abs_path),),
+            ).fetchone()
     except sqlite3.Error:
         return None
     if row is None:
@@ -264,9 +267,10 @@ def list_valid_detect_cache() -> dict:
         return {}
     try:
         db = _get_detect_db()
-        rows = db.execute(
-            "SELECT key, orig_path, mtime, size, result FROM detect_cache"
-        ).fetchall()
+        with _detect_cache_lock:
+            rows = db.execute(
+                "SELECT key, orig_path, mtime, size, result FROM detect_cache"
+            ).fetchall()
     except sqlite3.Error:
         return {}
     entries: dict = {}
@@ -886,45 +890,58 @@ def api_detect():
     return jsonify({"ok": True, "job_id": jid})
 
 
+def _parallel_workers() -> int:
+    """批处理文件级并行度：默认 min(CPU 核数, 4)；可用环境变量 TAOMUSIC_BATCH_WORKERS 覆盖。"""
+    try:
+        env = int(os.environ.get("TAOMUSIC_BATCH_WORKERS", "0"))
+        if env > 0:
+            return env
+    except (TypeError, ValueError):
+        pass
+    return max(1, min(os.cpu_count() or 1, 4))
+
+
 def run_batch_detect(job, payload: dict) -> dict:
-    """批量执行颜色检测：按顺序处理每个文件，逐个汇报进度。
+    """批量执行颜色检测：文件级并行（线程池），逐个汇报进度。
 
     payload.skip_cached 为真时，已有有效缓存的视频直接采用缓存结果，
     跳过重新检测（用于"全选后增量检测新文件"的场景）。
+
+    并行度见 :func:`_parallel_workers`；结果按入参顺序返回。
+    取消（cancel_event）置位后，工作线程在进度回调中抛出 JobCancelled，
+    主线程随即停止等待并向上传播（不再派发新任务）。
     """
     files = payload.get("files") or []
     overrides = build_detector_overrides(payload.get("params") or {})
     skip_cached = bool(payload.get("skip_cached"))
     total = len(files)
-    results = []
-    skipped = 0
-    for i, path in enumerate(files, start=1):
+    results: list = [None] * total
+
+    def worker(i: int, path: str):
+        """处理单个文件，返回 (index, result)；异常在内部收敛为错误结果。"""
         if job.cancel_event.is_set():
             raise JobCancelled()
         job.publish("progress", {
-            "index": i, "total": total, "file": path,
-            "percent": round((i - 1) / total * 100, 1),
+            "index": i + 1, "total": total, "file": path,
+            "percent": round(i / total * 100, 1),
             "stage": "pending", "message": "准备检测",
         })
         if not path or not os.path.isfile(path):
-            results.append({"file": path, "detected": False, "error": "文件不存在"})
-            continue
+            return i, {"file": path, "detected": False, "error": "文件不存在"}
 
         # 跳过已缓存：命中有效缓存则直接出结果，不做实际检测
         if skip_cached:
             cached = get_cached_detect_result(path)
             if cached is not None:
                 cached["skipped"] = True
-                results.append(cached)
-                skipped += 1
-                continue
+                return i, cached
 
-        def cb(stage, progress, message, _i=i, _path=path, _total=total):
+        def cb(stage, progress, message):
             if job.cancel_event.is_set():
                 raise JobCancelled()
             job.publish("progress", {
-                "index": _i, "total": _total, "file": _path,
-                "percent": round(((_i - 1) + progress) / _total * 100, 1),
+                "index": i + 1, "total": total, "file": path,
+                "percent": round((i + progress) / total * 100, 1),
                 "stage": stage, "progress": progress, "message": message,
             })
 
@@ -932,15 +949,35 @@ def run_batch_detect(job, payload: dict) -> dict:
             r = _detect_one(path, overrides, progress_cb=cb)
             r["file"] = path
             store_detect_result(r, path)  # 每个文件完成即写缓存，中断不丢已完成部分
-            results.append(r)
+            return i, r
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
-            results.append({"file": path, "detected": False, "error": str(exc)})
+            return i, {"file": path, "detected": False, "error": str(exc)}
+
+    workers = _parallel_workers()
+    if total <= 1 or workers <= 1:
+        # 单文件 / 禁用并行：退化为同步执行
+        for i, path in enumerate(files):
+            results[i] = worker(i, path)[1]
+    else:
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="batch-detect")
+        try:
+            futures = [pool.submit(worker, i, path) for i, path in enumerate(files)]
+            for fut in futures:
+                idx, r = fut.result()  # JobCancelled / KeyboardInterrupt 由此向上传播
+                results[idx] = r
+        except (JobCancelled, KeyboardInterrupt):
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise JobCancelled() from None
+        finally:
+            pool.shutdown(wait=False)
+
+    skipped = sum(1 for r in results if r and r.get("skipped"))
     return {
         "results": results,
         "summary": {
             "total": total,
-            "detected": sum(1 for r in results if r.get("detected")),
-            "failed": sum(1 for r in results if r.get("error")),
+            "detected": sum(1 for r in results if r and r.get("detected")),
+            "failed": sum(1 for r in results if r and r.get("error")),
             "skipped": skipped,
         },
     }
@@ -1218,7 +1255,12 @@ def api_trim():
 
 
 def run_batch_trim(job, payload: dict) -> dict:
-    """批量执行视频裁剪：每个文件使用各自的起点（来自检测结果或统一起点）。"""
+    """批量执行视频裁剪：文件级并行（线程池），每个文件使用各自的起点。
+
+    并行度见 :func:`_parallel_workers`；结果按入参顺序返回。
+    取消（cancel_event）置位后，工作线程在进度回调中抛出异常，
+    主线程随即停止等待并向上传播。
+    """
     items = payload.get("files") or []  # [{path, frame?|timestamp?, skip?}]
     params = dict(payload.get("params") or {})
     # 批量 Trim 维持现状：以检测结果为起点、无终点（保留到片尾）。
@@ -1228,35 +1270,35 @@ def run_batch_trim(job, payload: dict) -> dict:
     params.pop("end_value", None)
     output_dir = payload.get("output_dir") or ""
     total = len(items)
-    results = []
-    for i, item in enumerate(items, start=1):
+    results: list = [None] * total
+
+    def worker(i: int, item: dict):
+        """裁剪单个文件，返回 (index, result)；异常在内部收敛为错误结果。"""
         if job.cancel_event.is_set():
             raise JobCancelled()
         path = item.get("path") or ""
         job.publish("progress", {
-            "index": i, "total": total, "file": path,
-            "percent": round((i - 1) / total * 100, 1),
+            "index": i + 1, "total": total, "file": path,
+            "percent": round(i / total * 100, 1),
             "stage": "pending", "message": "准备裁剪",
         })
         if item.get("skip"):
-            results.append({"file": path, "ok": False,
-                            "error": item.get("reason") or "已跳过"})
-            continue
+            return i, {"file": path, "ok": False,
+                       "error": item.get("reason") or "已跳过"}
         if not path or not os.path.isfile(path):
-            results.append({"file": path, "ok": False, "error": "文件不存在"})
-            continue
+            return i, {"file": path, "ok": False, "error": "文件不存在"}
         start_override = {}
         if item.get("frame") is not None:
             start_override["frame"] = item["frame"]
         elif item.get("timestamp") is not None:
             start_override["timestamp"] = item["timestamp"]
 
-        def cb(pct, sec, _i=i, _path=path, _total=total):
+        def cb(pct, sec):
             if job.cancel_event.is_set():
                 raise KeyboardInterrupt()
             job.publish("progress", {
-                "index": _i, "total": _total, "file": _path,
-                "percent": round(((_i - 1) + pct / 100) / _total * 100, 1),
+                "index": i + 1, "total": total, "file": path,
+                "percent": round((i + pct / 100) / total * 100, 1),
                 "percent_file": float(pct), "seconds": float(sec),
                 "stage": "running", "message": "裁剪中",
             })
@@ -1268,19 +1310,38 @@ def run_batch_trim(job, payload: dict) -> dict:
                 confirm_cb=lambda p: False,  # 覆盖与否由前端 force 参数决定
                 cancel_event=job.cancel_event,
             )
-            results.append({
+            return i, {
                 "file": path, "ok": True,
                 "output_files": result.output_files,
                 "message": result.message,
-            })
+            }
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
-            results.append({"file": path, "ok": False, "error": str(exc)})
+            return i, {"file": path, "ok": False, "error": str(exc)}
+
+    workers = _parallel_workers()
+    if total <= 1 or workers <= 1:
+        # 单文件 / 禁用并行：退化为同步执行
+        for i, item in enumerate(items):
+            results[i] = worker(i, item)[1]
+    else:
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="batch-trim")
+        try:
+            futures = [pool.submit(worker, i, item) for i, item in enumerate(items)]
+            for fut in futures:
+                idx, r = fut.result()  # JobCancelled / KeyboardInterrupt 由此向上传播
+                results[idx] = r
+        except (JobCancelled, KeyboardInterrupt):
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise JobCancelled() from None
+        finally:
+            pool.shutdown(wait=False)
+
     return {
         "results": results,
         "summary": {
             "total": total,
-            "ok": sum(1 for r in results if r.get("ok")),
-            "failed": sum(1 for r in results if r.get("error")),
+            "ok": sum(1 for r in results if r and r.get("ok")),
+            "failed": sum(1 for r in results if r and r.get("error")),
         },
     }
 
