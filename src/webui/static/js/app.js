@@ -1456,11 +1456,14 @@ function wireUI() {
   // 任务中心：筛选 chip 与「清空」按钮（两列各一套）
   ["detect", "trim"].forEach((col) => {
     const tools = document.querySelector(`.task-tools[data-col="${col}"]`);
-    if (!tools) return;
-    tools.querySelectorAll(".chip").forEach((c) => {
-      c.addEventListener("click", () => switchFilter(col, c.dataset.filter));
-    });
-    tools.querySelector("[data-clear]").addEventListener("click", () => clearFinishedTasks(col));
+    if (tools) {
+      tools.querySelectorAll(".chip").forEach((c) => {
+        c.addEventListener("click", () => switchFilter(col, c.dataset.filter));
+      });
+    }
+    const panel = document.getElementById(col === "detect" ? "panelTaskDetect" : "panelTaskTrim");
+    const clear = panel && panel.querySelector("[data-clear]");
+    if (clear) clear.addEventListener("click", () => clearFinishedTasks(col));
   });
 
   // 批处理：选择 + 批量执行
