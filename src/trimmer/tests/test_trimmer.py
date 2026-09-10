@@ -11,10 +11,10 @@ from trimmer.core.trimmer import OutputMode, Trimmer, TrimmerConfig, build_comma
 
 
 def _media():
-    video = VideoStream(codec="h264", width=1920, height=1080, fps=30.0,
+    video = VideoStream(codec="h264", fps=30.0,
                         bit_rate=1_000_000, pix_fmt="yuv420p")
     audio = AudioStream(codec="aac", sample_rate=48000, channels=2, bit_rate=128_000)
-    return MediaInfo(path="x.mp4", duration=100.0, container=".mp4",
+    return MediaInfo(path="x.mp4", duration=100.0,
                      video=video, audio=audio, nb_frames=3000)
 
 
@@ -136,7 +136,7 @@ class TestIntervalOutputCheck:
         out = tmp_path / "out.mp4"
         out.write_bytes(b"")
         monkeypatch.setattr("trimmer.core.trimmer.probe", lambda p: MediaInfo(
-            path=p, duration=0.0, container=".mp4", video=None, audio=None))
+            path=p, duration=0.0, video=None, audio=None))
         with pytest.raises(FFmpegExecutionError):
             t._check_interval_output(str(out))
 
@@ -145,7 +145,7 @@ class TestIntervalOutputCheck:
         out = tmp_path / "out.mp4"
         out.write_bytes(b"data")
         monkeypatch.setattr("trimmer.core.trimmer.probe", lambda p: MediaInfo(
-            path=p, duration=1.0, container=".mp4", video=None, audio=None))
+            path=p, duration=1.0, video=None, audio=None))
         t._check_interval_output(str(out))  # 不抛异常
 
     def test_probe_failure_treated_as_empty(self, tmp_path, monkeypatch):

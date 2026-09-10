@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """媒体信息探测模块。
 
-通过 ffprobe 读取输入文件的封装容器、流编码参数（编码器、分辨率、帧率、
-码率、采样率、声道数等），并提供重编码时自动匹配参数的编码器映射。
+通过 ffprobe 读取输入文件的流编码参数（编码器、帧率、码率、采样率、声道数等），
+并提供重编码时自动匹配参数的编码器映射。
 """
 
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
@@ -74,8 +73,6 @@ class VideoStream:
     """视频流信息。"""
 
     codec: str
-    width: int
-    height: int
     fps: float
     bit_rate: Optional[int]
     pix_fmt: str
@@ -97,7 +94,6 @@ class MediaInfo:
 
     path: str
     duration: float
-    container: str
     video: Optional[VideoStream]
     audio: Optional[AudioStream]
     nb_frames: Optional[int] = None
@@ -157,7 +153,6 @@ def probe(path: str) -> MediaInfo:
         duration = float(fmt.get("duration") or 0.0)
     except (TypeError, ValueError):
         duration = 0.0
-    container = os.path.splitext(path)[1].lower() or (fmt.get("format_name") or "").split(",")[0]
 
     video = None
     audio = None
@@ -170,8 +165,6 @@ def probe(path: str) -> MediaInfo:
                 fps = _parse_rate(stream.get("r_frame_rate") or "25/1")
             video = VideoStream(
                 codec=stream.get("codec_name") or "h264",
-                width=_to_int(stream.get("width")) or 0,
-                height=_to_int(stream.get("height")) or 0,
                 fps=fps,
                 bit_rate=_to_int(stream.get("bit_rate")),
                 pix_fmt=stream.get("pix_fmt") or "yuv420p",
@@ -192,7 +185,6 @@ def probe(path: str) -> MediaInfo:
     return MediaInfo(
         path=path,
         duration=duration,
-        container=container,
         video=video,
         audio=audio,
         nb_frames=nb_frames,

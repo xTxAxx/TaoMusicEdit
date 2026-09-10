@@ -199,16 +199,6 @@ const Player = (function () {
     els.video.currentTime = Math.max(0, Math.min(t, dur));
   }
 
-  function seekTo(t) {
-    if (!info) return;
-    t = Math.max(0, Math.min(t, info.duration));
-    exactImg = null;
-    currentTime = t;
-    setVideoTime(t);
-    updateHud();
-    render();
-  }
-
   // ---------------- 帧精确控制 ----------------
   function stepFrames(delta) {
     if (!info || !path) { window.toast && toast("warn", "请先选择视频"); return; }
@@ -409,12 +399,6 @@ const Player = (function () {
   function clearDetected() {
     markers = [];
     detectedMark = null;
-    render();
-  }
-
-  function setMarkersVisible(v) {
-    markerVisible = v;
-    els.markerToggle.checked = v;
     render();
   }
 
@@ -922,20 +906,10 @@ const Player = (function () {
   return {
     init,
     loadVideo,
-    togglePlay,
-    pause,
-    seekTo,
-    stepFrames,
-    setAsStart,
-    setAsEnd,
     clearEndMark,
     setDetected,
     clearDetected,
-    setMarkersVisible,
-    getPath: () => path,
     getInfo: () => info,
-    getTime: () => currentTime,
-    formatTime,
   };
 })();
 

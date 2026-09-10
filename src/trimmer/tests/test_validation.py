@@ -18,10 +18,10 @@ from trimmer.utils.validation import (
 
 
 def _media(duration=100.0, fps=30.0, nb_frames=None):
-    video = VideoStream(codec="h264", width=1920, height=1080, fps=fps,
+    video = VideoStream(codec="h264", fps=fps,
                         bit_rate=1000, pix_fmt="yuv420p")
     audio = AudioStream(codec="aac", sample_rate=48000, channels=2, bit_rate=128)
-    return MediaInfo(path="x", duration=duration, container=".mp4",
+    return MediaInfo(path="x", duration=duration,
                      video=video, audio=audio, nb_frames=nb_frames)
 
 
@@ -102,7 +102,7 @@ class TestFrame:
 
     def test_no_fps(self):
         media = _media()
-        media.video = VideoStream(codec="h264", width=1, height=1, fps=0.0,
+        media.video = VideoStream(codec="h264", fps=0.0,
                                   bit_rate=None, pix_fmt="")
         with pytest.raises(ValidationError):
             validate_frame(10, media)

@@ -311,10 +311,10 @@ def prune_detect_cache() -> list:
     try:
         db = _get_detect_db()
         rows = db.execute(
-            "SELECT key, orig_path, mtime, size, result FROM detect_cache"
+            "SELECT key, orig_path, mtime, size FROM detect_cache"
         ).fetchall()
         bad = [
-            (key, orig_path) for key, orig_path, mtime, size, payload in rows
+            (key, orig_path) for key, orig_path, mtime, size in rows
             if not _detect_cache_entry_valid(orig_path, mtime, size)
         ]
         if bad:

@@ -6,7 +6,6 @@ const state = {
   outputDir: "",
   currentVideo: null,      // 当前选中视频绝对路径
   video: null,             // 当前视频元信息（duration/fps/nb_frames），供参数范围校验
-  detectResult: null,
   jobs: { detect: null, trim: null, batch: null },  // 正在运行的任务 job_id
   sel: new Set(),          // 批处理选择的视频路径集合
   selAnchor: null,         // shift 区选的锚点路径
@@ -28,13 +27,6 @@ function esc(s) {
 
 function basename(p) {
   return String(p).split(/[\\/]/).pop();
-}
-
-function formatBytes(n) {
-  if (!isFinite(n)) return "";
-  if (n < 1024) return n + " B";
-  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
 }
 
 // ---------------- Toast 反馈（已停用：按需求不再显示右下角提示） ----------------
@@ -126,20 +118,20 @@ function renderNode(node) {
     row.addEventListener("click", () => li.classList.toggle("open"));
     return li;
   }
+  // 仅渲染视频文件（非视频一律隐藏）；下方分支据此不再做 is_video 判断
   if (!node.is_video) return null;
   const li = document.createElement("li");
-  li.className = "tree-file" + (node.is_video ? " video" : "");
+  li.className = "tree-file video";
   const row = document.createElement("div");
   row.className = "tree-row file";
   row.dataset.path = node.path;
   const ext = (node.ext || "").replace(".", "").toUpperCase();
   row.innerHTML =
-    '<span class="tree-dot ' + (node.is_video ? "vid" : "file") + '"></span>' +
+    '<span class="tree-dot vid"></span>' +
     '<span class="tree-name">' + esc(node.name) + "</span>" +
-    '<span class="tree-meta">' + (node.is_video ? ext : formatBytes(node.size)) + "</span>";
+    '<span class="tree-meta">' + ext + "</span>";
   li.appendChild(row);
   row.addEventListener("click", (e) => {
-    if (!node.is_video) { toast("info", "非视频文件：仅支持视频格式（mp4/avi/mov 等）"); return; }
     if (e.ctrlKey || e.metaKey) { toggleSelect(node.path); return; }  // Ctrl：单选切换
     if (e.shiftKey) { rangeSelect(node.path); return; }               // Shift：区间选择
     selectOnly(node.path);                                            // 普通点击：单选并载入播放器
@@ -1288,7 +1280,6 @@ function handleJobCancelled(ctx) {
 // ---------------- 结果展示 ----------------
 // 单视频检测完成后的副作用：关联裁剪起点 + 播放器标记
 function applyDetectSideEffects(data) {
-  state.detectResult = data;
   const srcPath = (data && data.path) || state.currentVideo;
   if (srcPath) { state.batchDetectResults[srcPath] = data; state.batchRuns.add(srcPath); }
   if (data.detected) {

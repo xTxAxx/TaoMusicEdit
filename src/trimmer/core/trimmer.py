@@ -84,7 +84,6 @@ class TrimmerConfig:
     audio_codec: Optional[str] = None      #: 显式指定音频编码器（可选）
     hw_accel: str = "auto"                 #: GPU 加速策略：auto / none / force
     output_mode: OutputMode = OutputMode.FULL
-    verbose: bool = False
 
 
 @dataclass

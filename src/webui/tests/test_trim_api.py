@@ -23,10 +23,10 @@ from trimmer.core.probe import AudioStream, MediaInfo, VideoStream  # noqa: E402
 
 
 def _media(duration=100.0, fps=30.0, nb_frames=3000):
-    video = VideoStream(codec="h264", width=1920, height=1080, fps=fps,
+    video = VideoStream(codec="h264", fps=fps,
                         bit_rate=1000, pix_fmt="yuv420p")
     audio = AudioStream(codec="aac", sample_rate=48000, channels=2, bit_rate=128)
-    return MediaInfo(path="x", duration=duration, container=".mp4",
+    return MediaInfo(path="x", duration=duration,
                      video=video, audio=audio, nb_frames=nb_frames)
 
 
@@ -211,7 +211,8 @@ class TestBatchTrimIgnoresEnd:
                 return False
 
         job = type("Job", (), {"publish": lambda self, *a, **k: None,
-                               "cancel_event": _Event()})()
+                               "cancel_event": _Event(),
+                               "file_cancel": set()})()
         result = webui_app.run_batch_trim(job, {
             "files": [{"path": _video(tmp_path), "frame": 100}],
             "params": {"start_mode": "frame", "start_value": "50",

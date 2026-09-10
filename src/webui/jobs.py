@@ -11,7 +11,6 @@ import json
 import queue
 import threading
 import time
-from collections import deque
 from typing import Any, Callable, Dict, Optional
 
 
@@ -44,14 +43,12 @@ class Job:
         self.file_cancel: set = set()  # 批量任务中已请求中断的索引集合（1 基）
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
-        # 事件历史（供状态查询）与实时队列（供 SSE 消费）
-        self._events: deque = deque(maxlen=1000)
+        #: 实时事件队列（供 SSE 消费）
         self._queue: "queue.Queue" = queue.Queue(maxsize=2000)
 
     def publish(self, event: str, data: Any) -> None:
-        """追加一条事件；消费方通过 SSE 或状态接口获取。"""
+        """推入一条实时事件，供 SSE 消费者获取。"""
         payload = {"type": event, "data": data, "ts": time.time()}
-        self._events.append(payload)
         try:
             self._queue.put(payload, timeout=1)
         except queue.Full:

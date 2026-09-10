@@ -122,7 +122,6 @@ def build_config(args: argparse.Namespace) -> TrimmerConfig:
         audio_codec=args.audio_codec,
         hw_accel=args.hw_accel,
         output_mode=output_mode,
-        verbose=args.verbose,
     )
 
 

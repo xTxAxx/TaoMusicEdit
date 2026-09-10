@@ -237,11 +237,6 @@ body {
 .batch-toolbar { display: flex; gap: 6px; margin-bottom: 0px; }
 .batch-toolbar .btn { flex: 1; }
 
-/* 批量结果：输出文件名缩进 */
-.out-sub {
-  margin: 2px 0 0 16px; font-size: 11.5px; color: var(--text-dim);
-  word-break: break-all;
-}
 .placeholder { color: var(--text-dim); font-size: 12px; padding: 14px; text-align: center; }
 
 /* ---------------- 播放器 ---------------- */
@@ -542,55 +537,12 @@ input[type="number"] {
 /* 批处理设置：跳过已缓存 */
 .skip-cached-row { display: flex; margin-top: 2px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
 
-/* ---------------- 进度 / 结果 ---------------- */
-.progress-wrap { margin-top: 10px; }
-.progress-label { font-size: 12px; color: var(--text-dim); margin-bottom: 5px; min-height: 15px; }
-.progress-bar {
-  height: 10px; background: var(--bg-soft);
-  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
-}
+/* ---------------- 进度 ---------------- */
 .progress-fill {
   height: 100%; width: 0%;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   transition: width 0.25s;
 }
-.progress-wrap .btn.small { margin-top: 8px; }
-
-/* 批处理：每文件任务行（限高 + 滚动） */
-.batch-list {
-  display: flex; flex-direction: column; gap: 8px;
-  max-height: 260px; overflow-y: auto; margin-top: 10px; padding-right: 2px;
-}
-.batch-row {
-  border: 1px solid var(--border); border-radius: 8px;
-  padding: 6px 8px; background: var(--bg-soft);
-}
-.batch-row-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; font-size: 13px; margin-bottom: 5px;
-}
-.batch-row-name {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.batch-row-state { flex-shrink: 0; font-size: 12px; color: var(--text-dim); }
-.batch-row-bar {
-  height: 6px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 3px; overflow: hidden;
-}
-.batch-row-bar .progress-fill { transition: width 0.2s; }
-.batch-log { margin-top: 4px; font-size: 11px; color: var(--text-dim); line-height: 1.55; }
-.batch-log div { margin-top: 1px; }
-.batch-log div:first-child { margin-top: 0; }
-.batch-row.done .batch-row-bar .progress-fill { background: linear-gradient(90deg, var(--ok), var(--accent-2)); }
-.batch-row.fail .batch-row-bar .progress-fill { background: linear-gradient(90deg, var(--bad), var(--bad)); }
-
-.result { margin-top: 10px; font-size: 12.5px; }
-.result-msg { padding: 8px 10px; border-radius: 7px; font-weight: 600; }
-.result-msg.ok { background: rgba(46,204,113,0.12); color: var(--ok); }
-.result-msg.fail { background: rgba(231,76,60,0.12); color: var(--bad); }
-.kv, .points { margin: 8px 0 0; padding-left: 18px; color: var(--text-dim); }
-.kv li, .points li { margin: 3px 0; }
-.out-title { margin-top: 8px; font-size: 12px; color: var(--text-dim); }
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
 
