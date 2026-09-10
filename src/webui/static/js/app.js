@@ -639,11 +639,9 @@ function buildTaskRow(t) {
 
   const actions = document.createElement("div");
   actions.className = "task-actions";
-  const bLog = mkTaskBtn("日志", "展开 / 收起完整日志");
   const bInterrupt = mkTaskBtn("中断", "中断该任务");
   const bRetry = mkTaskBtn("重试", "重新执行该任务");
   const bDel = mkTaskBtn("删除", "从列表移除该任务");
-  actions.appendChild(bLog);
   actions.appendChild(bInterrupt);
   actions.appendChild(bRetry);
   actions.appendChild(bDel);
@@ -655,9 +653,13 @@ function buildTaskRow(t) {
   row.appendChild(actions);
   list.appendChild(row);
 
-  const els = { row, fill, badge, time, detail, log, bLog,
+  const els = { row, fill, badge, time, detail, log,
                 interrupt: bInterrupt, retry: bRetry, del: bDel };
-  bLog.addEventListener("click", () => toggleTaskLog(t));
+  // 点击卡片任意处展开 / 收起日志；按钮点击不触发切换（由各自处理器接管）
+  row.addEventListener("click", (ev) => {
+    if (ev.target.closest("button")) return;
+    toggleTaskLog(t);
+  });
   bInterrupt.addEventListener("click", () => interruptTask(t));
   bRetry.addEventListener("click", () => retryTask(t));
   bDel.addEventListener("click", () => removeTask(t));
@@ -665,9 +667,7 @@ function buildTaskRow(t) {
 }
 
 function toggleTaskLog(t) {
-  const els = taskEls(t);
-  els.log.classList.toggle("collapsed");
-  els.bLog.textContent = els.log.classList.contains("collapsed") ? "日志" : "收起日志";
+  taskEls(t).log.classList.toggle("collapsed");
 }
 
 function addTask(col, path, payload, init) {
@@ -863,7 +863,6 @@ function taskLog(t, txt) {
   d.textContent = txt;
   els.log.appendChild(d);
   while (els.log.children.length > 30) els.log.removeChild(els.log.firstChild);
-  els.bLog.disabled = false;
 }
 
 function setTaskRunning(t, label) {
@@ -974,8 +973,6 @@ function startRetry(t) {
   els.detail.textContent = "";
   els.log.innerHTML = "";
   els.log.classList.add("collapsed");
-  els.bLog.disabled = true;
-  els.bLog.textContent = "日志";
   updateTaskActions(t);
   updateColumnTotal(t.col);
 }

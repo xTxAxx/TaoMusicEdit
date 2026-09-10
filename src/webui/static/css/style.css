@@ -431,7 +431,10 @@ body {
 .task-item {
   border: 1px solid var(--border); border-radius: 8px;
   padding: 6px 8px; background: var(--bg-soft);
+  cursor: pointer;  /* 点击卡片展开 / 收起日志 */
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
+.task-item:hover { border-color: var(--accent); background: var(--bg); }
 .task-item.hidden { display: none; }
 .task-item.group-hide { display: none; }
 .task-head {
