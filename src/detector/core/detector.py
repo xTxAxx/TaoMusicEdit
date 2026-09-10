@@ -53,28 +53,12 @@ class Detection:
     timestamp: Optional[float] = None
     details: Optional["DetectionDetails"] = None
 
-    # -- 兼容别名：帧序号 / 时间戳 -
-    @property
-    def frame_index(self) -> Optional[int]:
-        return self.frame
-
-    @property
-    def timestamp_seconds(self) -> Optional[float]:
-        return self.timestamp
-
-    @property
-    def t(self) -> Optional[float]:
-        return self.timestamp
-
     def __bool__(self) -> bool:
         return self.detected
 
     def __iter__(self):
         yield self.frame
         yield self.timestamp
-
-    def __len__(self) -> int:
-        return 2
 
     def __repr__(self) -> str:  # pragma: no cover - 仅用于调试输出
         return f"Detection(detected={self.detected}, frame={self.frame}, timestamp={self.timestamp})"

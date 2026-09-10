@@ -80,13 +80,3 @@ def color_confidence(
 def color_match(confidence: float, threshold: float) -> bool:
     """判断置信度是否达到阈值（严格匹配）。"""
     return float(confidence) >= float(threshold)
-
-
-def pixel_is_match(
-    pixel: Union[RGB, np.ndarray],
-    target: Union[RGB, np.ndarray],
-    threshold: float = 0.97,
-    tolerance: float = 10.0,
-) -> bool:
-    """一步完成：计算像素置信度并判断是否匹配。"""
-    return color_match(color_confidence(pixel, target, tolerance), threshold)

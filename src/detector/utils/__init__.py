@@ -5,7 +5,6 @@ from .color import (
     rgb_to_hex,
     color_confidence,
     color_match,
-    pixel_is_match,
     MAX_RGB_DISTANCE,
 )
 from .logger import get_logger
@@ -25,7 +24,6 @@ __all__ = [
     "rgb_to_hex",
     "color_confidence",
     "color_match",
-    "pixel_is_match",
     "MAX_RGB_DISTANCE",
     "get_logger",
     "probe_video",

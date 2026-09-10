@@ -73,12 +73,7 @@ class TestSyntheticEndToEnd:
         frame, time = result  # 解构赋值
         assert frame == result.frame
         assert time == result.timestamp
-        assert len(result) == 2
         assert bool(result) is True
-        # 兼容别名
-        assert result.frame_index == result.frame
-        assert result.timestamp_seconds == result.timestamp
-        assert result.t == result.timestamp
 
     def test_detail_mode(self, synth_320):
         """detail=True 时才提供详细诊断信息。"""

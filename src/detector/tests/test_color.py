@@ -8,7 +8,6 @@ from detector.utils.color import (
     color_confidence,
     color_match,
     hex_to_rgb,
-    pixel_is_match,
     rgb_to_hex,
 )
 
@@ -82,11 +81,7 @@ class TestMatch:
         assert color_match(0.9699, 0.97) is False
         assert color_match(0.971, 0.97) is True
 
-    def test_pixel_is_match(self):
-        assert pixel_is_match(TARGET, TARGET, threshold=0.97, tolerance=10.0) is True
-        assert pixel_is_match((247, 249, 15), TARGET, threshold=0.97, tolerance=10.0) is True
-        assert pixel_is_match((18, 18, 18), TARGET, threshold=0.97, tolerance=10.0) is False
-
     def test_real_region_color_matches_at_097(self):
         # 真实视频中命中区域的像素约 (245, 254, 19)，应能通过 0.97 阈值
-        assert pixel_is_match((245, 254, 19), TARGET, threshold=0.97, tolerance=10.0) is True
+        conf = color_confidence((245, 254, 19), TARGET, tolerance=10.0)
+        assert color_match(conf, 0.97) is True

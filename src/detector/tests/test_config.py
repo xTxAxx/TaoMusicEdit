@@ -62,8 +62,3 @@ class TestConfig:
     def test_detector_config_and_kwargs_conflict(self):
         with pytest.raises(TypeError):
             VideoColorDetector(DetectorConfig(), confidence_threshold=0.9)
-
-    def test_to_dict(self):
-        d = DetectorConfig().to_dict()
-        assert d["confidence_threshold"] == 0.97
-        assert "progress_callback" not in d

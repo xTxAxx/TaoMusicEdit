@@ -119,12 +119,3 @@ class DetectorConfig:
         if unknown:
             raise TypeError(f"未知配置项: {sorted(unknown)}")
         return replace(self, **kwargs)
-
-    def to_dict(self) -> dict:
-        """导出为字典（跳过回调等不可序列化字段）。"""
-        d = {}
-        for f in fields(self):
-            if f.repr is False:
-                continue
-            d[f.name] = getattr(self, f.name)
-        return d

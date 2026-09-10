@@ -47,7 +47,7 @@ detector/
 ├── core/                  # 核心检测算法
 │   ├── algorithm.py       # 反向跳帧 + 局部细化（纯逻辑，可独立测试）
 │   ├── detector.py        # VideoColorDetector 主入口，编排整条流水线
-│   ├── matcher.py         # 帧级四点颜色匹配器（坐标适配 + 置信度计算）
+│   ├── matcher.py         # 帧级颜色匹配器（多检测点 + 坐标适配 + 置信度计算）
 │   └── errors.py          # 异常层级
 ├── utils/                 # 工具函数
 │   ├── ffmpeg.py          # ffprobe/ffmpeg 抽帧、两种帧提取器
@@ -172,7 +172,7 @@ conf     = 1.0                          若 dist ≤ tolerance
            1 − (dist−tolerance)/(max_dist−tolerance)   否则
 ```
 
-- 四点的**整体置信度**取四点的最小值，且要求**四点全部** `conf ≥ threshold` 才算命中。
+- 各检测点的**整体置信度**取所有检测点的最小值，且要求**全部检测点** `conf ≥ threshold` 才算命中。
 - `confidence_threshold`（默认 `0.97`）：严格匹配阈值。
 - `color_tolerance`（默认 `10.0`）：颜色容差范围，**可配置接口**。
   真实视频为有损编码，目标区域像素约为 `(245,254,19)`，距 `#F7F10F` 欧氏距离约 13~16；
@@ -192,7 +192,7 @@ conf = color_confidence((245, 254, 19), rgb, tolerance=10.0)   # ≈ 1.0
 
 ### 7.1 `DetectorConfig`（`detector/config.py`）
 
-全部可配置参数（dataclass），支持 `with_overrides(**kwargs)` 局部覆盖、`validate()` 校验、`to_dict()` 导出。
+全部可配置参数（dataclass），支持 `with_overrides(**kwargs)` 局部覆盖、`validate()` 校验。
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -235,13 +235,12 @@ VideoColorDetector(config: DetectorConfig = None, **overrides)
 | `details` | `DetectionDetails \| None` | 详细诊断（仅 `detail=True` 时非空） |
 
 - 支持解构赋值：`frame, time = result`；`bool(result)` 等价于 `result.detected`。
-- 兼容别名：`result.frame_index`、`result.timestamp_seconds`、`result.t`。
 
 ### 7.3.1 `DetectionDetails`（`detail=True` 时提供）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `confidence` | `float \| None` | 目标帧整体置信度（四点评分最小值） |
+| `confidence` | `float \| None` | 目标帧整体置信度（各检测点评分最小值） |
 | `point_matches` | `list[PointMatch] \| None` | 各检测点明细（x,y,RGB,conf,matched） |
 | `coarse_bracket` / `fine_bracket` | `(float,float) \| None` | 粗 / 细化定位区间 |
 | `stage_stats` | `dict` | 各阶段探测帧数（coarse/fine/precise） |
@@ -264,7 +263,7 @@ VideoColorDetector(config: DetectorConfig = None, **overrides)
 
 - `hex_to_rgb("#F7F10F") -> (247,241,15)`、`rgb_to_hex((247,241,15)) -> "#F7F10F"`
 - `color_confidence(pixel_rgb, target_rgb, tolerance=0.0) -> float`
-- `color_match(confidence, threshold) -> bool`、`pixel_is_match(pixel, target, threshold, tolerance) -> bool`
+- `color_match(confidence, threshold) -> bool`
 
 ---
 

@@ -102,12 +102,11 @@ _cache_lock = threading.Lock()
 # 设计要点：
 # - 单库文件 src/webui/detect_cache.db，WAL 模式，写入为单条事务（原子、无写放大）；
 # - 主键使用 os.path.normcase 归一化路径（Windows 大小写不敏感），另存原始路径；
-# - 惰性初始化：首次访问时建表，并自动迁移旧版 detect_cache.json。
+# - 惰性初始化：首次访问时建表。
 # ---------------------------------------------------------------------------
 import sqlite3  # noqa: E402
 
 _DETECT_CACHE_DB = os.path.join(_BASE, "detect_cache.db")
-_DETECT_CACHE_JSON_LEGACY = os.path.join(_BASE, "detect_cache.json")
 _detect_cache_lock = threading.RLock()
 _detect_db: sqlite3.Connection | None = None
 
@@ -139,7 +138,7 @@ def _count_detect_cache() -> int:
 
 
 def _get_detect_db() -> sqlite3.Connection:
-    """获取缓存数据库连接（惰性初始化 + 旧 JSON 自动迁移）。"""
+    """获取缓存数据库连接（惰性初始化）。"""
     global _detect_db
     with _detect_cache_lock:
         if _detect_db is not None:
@@ -156,39 +155,9 @@ def _get_detect_db() -> sqlite3.Connection:
             " ts REAL NOT NULL,"
             " result TEXT NOT NULL)"       # 检测结果 JSON
         )
-        _migrate_legacy_json(conn)
         conn.commit()
         _detect_db = conn
         return _detect_db
-
-
-def _migrate_legacy_json(conn: sqlite3.Connection) -> None:
-    """把旧版 detect_cache.json 的数据一次性迁入 SQLite，随后重命名备份。"""
-    if not os.path.isfile(_DETECT_CACHE_JSON_LEGACY):
-        return
-    try:
-        with open(_DETECT_CACHE_JSON_LEGACY, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            now = time.time()
-            for p, entry in data.items():
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO detect_cache VALUES (?,?,?,?,?,?)",
-                        (_norm_key(p), os.path.abspath(p),
-                         float(entry.get("mtime") or 0),
-                         int(entry.get("size") or 0),
-                         float(entry.get("ts") or now),
-                         json.dumps(entry.get("result") or {}, ensure_ascii=False)),
-                    )
-                except (TypeError, ValueError):
-                    continue  # 脏条目跳过，不中断迁移
-        conn.commit()
-        os.replace(_DETECT_CACHE_JSON_LEGACY, _DETECT_CACHE_JSON_LEGACY + ".migrated")
-    except (OSError, ValueError):
-        pass  # 迁移失败不影响缓存功能本身
 
 
 def _detect_cache_entry_valid(path: str, mtime: float, size: int) -> bool:
