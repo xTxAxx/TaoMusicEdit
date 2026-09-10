@@ -715,23 +715,44 @@ function updateColumnTotal(col) {
   const fill = document.getElementById(col === "detect" ? "detectTotalFill" : "trimTotalFill");
   const label = document.getElementById(col === "detect" ? "detectTotalLabel" : "trimTotalLabel");
   const empty = document.getElementById(col === "detect" ? "detectTaskEmpty" : "trimTaskEmpty");
+  const box = fill ? fill.closest(".task-total") : null;
   if (empty) empty.hidden = arr.length > 0;
   if (!arr.length) {
-    if (fill) { fill.style.width = "0%"; fill.classList.remove("full"); }
+    // 无任务：整体隐藏总进度区域，避免空轨道像"坏了"
+    if (box) box.hidden = true;
+    if (fill) { fill.style.width = "0%"; fill.classList.remove("full", "warn", "running"); }
     if (label) label.textContent = "";
     return;
   }
-  let sum = 0, done = 0;
+  if (box) box.hidden = false;
+  // 只统计"当前活动任务集"：有未完成任务时，已完成的历史任务不再拉低总进度；
+  // 全部完成时展示整个列表的最终结果（避免新批次/清空导致进度条往回走）。
+  const activeJobs = new Set();
+  let anyActive = false;
   arr.forEach((t) => {
-    const finished = t.status === "success" || t.status === "fail" || t.status === "cancelled";
-    sum += finished ? 100 : t.progress;
-    if (finished) done++;
+    if (t.status === "pending" || t.status === "running") {
+      anyActive = true;
+      if (t.jobId) activeJobs.add(t.jobId);
+    }
+  });
+  const base = anyActive
+    ? arr.filter((t) => (t.jobId ? activeJobs.has(t.jobId) : t.status === "pending" || t.status === "running"))
+    : arr;
+  // 条宽 = 处理完成率（失败/取消也算"跑完"）；颜色 = 结果质量（绿=全成，橙红=有失败，蓝流光=运行中）
+  let sum = 0, success = 0, hasFail = false, running = false;
+  base.forEach((t) => {
+    if (t.status === "success") { sum += 100; success++; }
+    else if (t.status === "fail" || t.status === "cancelled") { sum += 100; hasFail = true; }
+    else { sum += t.progress; if (t.status === "running") running = true; }
   });
   if (fill) {
-    fill.style.width = (sum / arr.length).toFixed(1) + "%";
-    fill.classList.toggle("full", done === arr.length);
+    fill.style.width = (sum / base.length).toFixed(1) + "%";
+    fill.classList.toggle("full", success === base.length);
+    fill.classList.toggle("warn", hasFail);
+    fill.classList.toggle("running", running);
   }
-  if (label) label.textContent = done + "/" + arr.length;
+  // 标签 = 成功数/总数，失败不再计入分子
+  if (label) label.textContent = success + "/" + base.length;
 }
 
 // ---------------- 筛选 ----------------
@@ -1104,6 +1125,10 @@ function openSSE(jobId, kind) {
     let p; try { p = JSON.parse(ev.data); } catch (e) { return; }
     handleJobProgress(ctx, p);
   });
+  es.addEventListener("file_done", (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    handleJobFileDone(ctx, d);
+  });
   es.addEventListener("done", (ev) => {
     let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
     handleJobDone(ctx, d);
@@ -1136,6 +1161,14 @@ function stageLabel(stage) {
 // ---------------- 任务中心：SSE 事件处理 ----------------
 // 日志减噪：仅记录阶段切换、关键事件（命中/完成/失败/跳过/错误）与整百分比里程碑，
 // 逐帧扫描等高频消息只更新进度与详情行，不再逐条刷入日志。
+// 批量任务中单个文件处理完成：立即终态化该任务（含缓存命中/取消/失败），
+// 不必等整批 done 事件一次性刷新，总进度条随之单调推进。
+function handleJobFileDone(ctx, d) {
+  const t = ctx.tasks[(d.index || 1) - 1];
+  if (!t) { updateColumnTotal(ctx.col); return; }
+  const r = finalizeItemResult(d.result || {}, ctx.kind === "batch_detect" ? "detect" : "trim");
+  finalizeTask(t, r.status, r.lines, d.result || null);
+}
 function handleJobProgress(ctx, p) {
   const kind = ctx.kind;
   if (kind === "detect" || kind === "trim") {
@@ -1167,7 +1200,9 @@ function handleJobProgress(ctx, p) {
   const t = ctx.tasks[(p.index || 1) - 1];
   if (!t) { updateColumnTotal(ctx.col); return; }
   if (kind === "batch_detect") {
-    const pct = (p.progress != null) ? Math.round(p.progress * 100) : Math.round(p.percent || 0);
+    // 单文件进度从 0 起（后端 pending 事件已带 progress=0），
+    // 不使用批内位置百分比，避免任务开局虚高、总进度条随后回退
+    const pct = Math.round((p.progress || 0) * 100);
     const st = stageLabel(p.stage);
     const txt = st ? (st + "：" + (p.message || "")) : (p.message || "");
     setTaskProgress(t, pct, txt || ("检测中 " + pct + "%"));
@@ -1178,7 +1213,7 @@ function handleJobProgress(ctx, p) {
     }
   } else {
     const pctF = (p.percent_file != null) ? Math.round(p.percent_file) : null;
-    const pct = (pctF != null) ? pctF : Math.round(p.percent || 0);
+    const pct = (pctF != null) ? pctF : 0;
     setTaskProgress(t, pct, "裁剪中 " + pct + "%");
     if (pctF != null && (pctF >= 100 || pctF === 0 || pctF - (t._lastTrimLog || 0) >= 25)) {
       taskLog(t, "裁剪中 " + pctF + "%");
@@ -1213,6 +1248,8 @@ function handleJobDone(ctx, data) {
     results.forEach((r) => { if (r && r.file) { map[r.file] = r; state.batchRuns.add(r.file); } });
     state.batchDetectResults = map;
     ctx.tasks.forEach((t, i) => {
+      // 已由 file_done 终态化的跳过，避免日志重复（断线兜底时仍会补齐）
+      if (t.status === "success" || t.status === "fail" || t.status === "cancelled") return;
       const r = finalizeItemResult(results[i] || {}, "detect");
       finalizeTask(t, r.status, r.lines, results[i] || null);
     });
@@ -1226,6 +1263,8 @@ function handleJobDone(ctx, data) {
   // batch_trim
   const results = data.results || [];
   ctx.tasks.forEach((t, i) => {
+    // 已由 file_done 终态化的跳过，避免日志重复（断线兜底时仍会补齐）
+    if (t.status === "success" || t.status === "fail" || t.status === "cancelled") return;
     const r = finalizeItemResult(results[i] || {}, "trim");
     finalizeTask(t, r.status, r.lines, results[i] || null);
   });
@@ -1497,6 +1536,9 @@ async function initApp() {
   };
   await refreshWorkspace();
   await refreshOutput();
+  // 初始化总进度条：无任务时整体隐藏，避免空轨道
+  updateColumnTotal("detect");
+  updateColumnTotal("trim");
   updateActions();
   setStatus("就绪");
 }

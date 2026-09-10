@@ -165,11 +165,15 @@ def detect_onset(
                 return OnsetResult(False, None, None, None, stats, "未检测到目标颜色")
             t_prev = max(0.0, fallback_hit - fine_step)
             t_hit = fallback_hit
-            _report("locate", W_COARSE, f"兜底定位粗区间 ({t_prev:.2f}, {t_hit:.2f}]")
+            # 保持进度单调：兜底路径已推进到 W_COARSE + W_FINE*…，不能回退到 W_COARSE
+            _report("locate", W_COARSE + W_FINE * (stats["fine"] / fine_total),
+                    f"兜底定位粗区间 ({t_prev:.2f}, {t_hit:.2f}]")
 
     assert t_prev is not None and t_hit is not None
     coarse_bracket = (float(t_prev), float(t_hit))
-    _report("locate", W_COARSE, f"定位粗区间 ({t_prev:.2f}, {t_hit:.2f}]")
+    # 正常路径 fine=0 时等于 W_COARSE，兜底路径延续已报告的进度，保证单调
+    _report("locate", W_COARSE + W_FINE * (stats["fine"] / fine_total),
+            f"定位粗区间 ({t_prev:.2f}, {t_hit:.2f}]")
 
     # ---------------- 阶段 3：细化 ----------------
     t_prev_f: float = float(t_prev)
@@ -321,7 +325,10 @@ def detect_offset(
 
     assert t_hit is not None and t_next is not None
     coarse_bracket = (float(t_hit), float(t_next))
-    _report("locate", W_COARSE, f"定位粗区间 ({t_hit:.2f}, {t_next:.2f}]")
+    # 保持进度单调：正常路径（无兜底扫描 fine=0）回落为 W_COARSE，
+    # 兜底路径延续已报告的进度；fine_total 仅兜底分支赋值，这里独立计算避免未绑定
+    _report("locate", W_COARSE + W_FINE * (stats["fine"] / max(1, int(math.ceil(search_window / fine_step)))),
+            f"定位粗区间 ({t_hit:.2f}, {t_next:.2f}]")
 
     # ---------------- 阶段 3：细化（找最后一个命中点） ----------------
     fine_total = max(1, int(math.ceil((t_next - t_hit) / fine_step)))

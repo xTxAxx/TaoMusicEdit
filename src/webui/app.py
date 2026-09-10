@@ -930,25 +930,32 @@ def run_batch_detect(job, payload: dict) -> dict:
 
     def worker(i: int, path: str):
         """处理单个文件，返回 (index, result)；异常在内部收敛为错误结果。"""
+
+        def done(result: dict):
+            # 单文件完成即发布终态事件，前端立即标记该任务完成，无需等整批结束
+            job.publish("file_done", {"index": i + 1, "file": path, "result": result})
+            return i, result
+
         if job.cancel_event.is_set():
             raise JobCancelled()
         # 单文件取消：该索引已在取消集合中（含排队未开始的文件）直接返回取消结果
         if (i + 1) in job.file_cancel:
-            return i, {"file": path, "detected": False, "error": "已取消", "cancelled": True}
+            return done({"file": path, "detected": False, "error": "已取消", "cancelled": True})
         job.publish("progress", {
             "index": i + 1, "total": total, "file": path,
             "percent": round(i / total * 100, 1),
+            "progress": 0.0,  # 单文件进度从 0 起，避免以"批内位置"虚占进度
             "stage": "pending", "message": "准备检测",
         })
         if not path or not os.path.isfile(path):
-            return i, {"file": path, "detected": False, "error": "文件不存在"}
+            return done({"file": path, "detected": False, "error": "文件不存在"})
 
         # 跳过已缓存：命中有效缓存则直接出结果，不做实际检测
         if skip_cached:
             cached = get_cached_detect_result(path)
             if cached is not None:
                 cached["skipped"] = True
-                return i, cached
+                return done(cached)
 
         def cb(stage, progress, message):
             if job.cancel_event.is_set():
@@ -965,11 +972,11 @@ def run_batch_detect(job, payload: dict) -> dict:
             r = _detect_one(path, overrides, progress_cb=cb)
             r["file"] = path
             store_detect_result(r, path)  # 每个文件完成即写缓存，中断不丢已完成部分
-            return i, r
+            return done(r)
         except FileCancelled:
-            return i, {"file": path, "detected": False, "error": "已取消", "cancelled": True}
+            return done({"file": path, "detected": False, "error": "已取消", "cancelled": True})
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
-            return i, {"file": path, "detected": False, "error": str(exc)}
+            return done({"file": path, "detected": False, "error": str(exc)})
 
     workers = _parallel_workers()
     if total <= 1 or workers <= 1:
@@ -1293,22 +1300,29 @@ def run_batch_trim(job, payload: dict) -> dict:
 
     def worker(i: int, item: dict):
         """裁剪单个文件，返回 (index, result)；异常在内部收敛为错误结果。"""
+        path = item.get("path") or ""
+
+        def done(result: dict):
+            # 单文件完成即发布终态事件，前端立即标记该任务完成，无需等整批结束
+            job.publish("file_done", {"index": i + 1, "file": path, "result": result})
+            return i, result
+
         if job.cancel_event.is_set():
             raise JobCancelled()
-        path = item.get("path") or ""
         # 单文件取消：直接返回取消结果（含排队未开始的文件）
         if (i + 1) in job.file_cancel:
-            return i, {"file": path, "ok": False, "error": "已取消", "cancelled": True}
+            return done({"file": path, "ok": False, "error": "已取消", "cancelled": True})
         job.publish("progress", {
             "index": i + 1, "total": total, "file": path,
             "percent": round(i / total * 100, 1),
+            "percent_file": 0.0,  # 单文件进度从 0 起，避免以"批内位置"虚占进度
             "stage": "pending", "message": "准备裁剪",
         })
         if item.get("skip"):
-            return i, {"file": path, "ok": False,
-                       "error": item.get("reason") or "已跳过"}
+            return done({"file": path, "ok": False,
+                         "error": item.get("reason") or "已跳过"})
         if not path or not os.path.isfile(path):
-            return i, {"file": path, "ok": False, "error": "文件不存在"}
+            return done({"file": path, "ok": False, "error": "文件不存在"})
         start_override = {}
         if item.get("frame") is not None:
             start_override["frame"] = item["frame"]
@@ -1334,15 +1348,15 @@ def run_batch_trim(job, payload: dict) -> dict:
                 confirm_cb=lambda p: False,  # 覆盖与否由前端 force 参数决定
                 cancel_event=job.cancel_event,
             )
-            return i, {
+            return done({
                 "file": path, "ok": True,
                 "output_files": result.output_files,
                 "message": result.message,
-            }
+            })
         except FileCancelled:
-            return i, {"file": path, "ok": False, "error": "已取消", "cancelled": True}
+            return done({"file": path, "ok": False, "error": "已取消", "cancelled": True})
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
-            return i, {"file": path, "ok": False, "error": str(exc)}
+            return done({"file": path, "ok": False, "error": str(exc)})
 
     workers = _parallel_workers()
     if total <= 1 or workers <= 1:
