@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""帧级颜色匹配器：负责检测点坐标适配与单帧四点匹配判定。"""
+"""帧级颜色匹配器：负责检测点坐标适配与单帧多点匹配判定。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -29,7 +29,7 @@ class PointMatch:
 
 @dataclass
 class FrameMatch:
-    """单帧的整体匹配结果（四点全部命中才算匹配）。"""
+    """单帧的整体匹配结果（各检测点全部命中才算匹配）。"""
 
     matched: bool
     confidence: float
@@ -43,7 +43,7 @@ class FrameMatch:
 
 
 class FrameMatcher:
-    """对单帧执行四点颜色匹配。
+    """对单帧执行多检测点颜色匹配。
 
     负责：
     - 根据视频实际分辨率对检测点坐标进行等比缩放（坐标系统适配）；
@@ -97,7 +97,7 @@ class FrameMatcher:
 
     # ------------------------------------------------------------------
     def match(self, frame_bgr: np.ndarray) -> FrameMatch:
-        """对一帧 BGR 图像执行四点颜色匹配。
+        """对一帧 BGR 图像执行多检测点颜色匹配。
 
         :param frame_bgr: OpenCV BGR 顺序的 (H, W, 3) 图像
         :return: 整体匹配结果（含各点明细）

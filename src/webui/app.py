@@ -362,7 +362,11 @@ def _video_info(path: str):
 
 
 def _get_frame_jpeg(path: str, t: float):
-    """提取指定时间戳的精确帧并编码为 JPEG（带 LRU 缓存）。"""
+    """提取指定时间戳的精确帧并编码为 JPEG（FIFO 上限缓存）。
+
+    命中时不刷新顺序，淘汰固定取最早插入项，故为 FIFO 而非 LRU；
+    如需真 LRU（提升逐帧回看命中率），需在命中时做一次"删后重插"。
+    """
     key = (path, round(t, 3))
     with _cache_lock:
         hit = _frame_cache.get(key)

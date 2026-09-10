@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """视频颜色检测器：对外主入口。
 
-组合了 FFmpeg 帧提取、四点颜色匹配与「反向跳帧 + 局部细化」算法，
+组合了 FFmpeg 帧提取、多检测点颜色匹配与「反向跳帧 + 局部细化」算法，
 提供简洁的初始化与检测接口，返回结构化结果。
 """
 from __future__ import annotations
@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 from ..config import DetectorConfig
+from ..utils.color import rgb_to_hex
 from ..utils.ffmpeg import (
     FrameExtractor,
     VideoInfo,
@@ -219,7 +220,7 @@ class VideoColorDetector:
         self.logger.info(
             "有效检测点: %s（目标色 %s 阈值=%.2f 容差=%.1f）",
             matcher.effective_points,
-            _rgb_str(self.config.target_color),
+            rgb_to_hex(self.config.target_color),
             self.config.confidence_threshold,
             self.config.color_tolerance,
         )
@@ -315,7 +316,3 @@ class VideoColorDetector:
                 message=onset.message,
             )
         return result
-
-
-def _rgb_str(rgb) -> str:
-    return f"#{''.join(f'{int(c):02X}' for c in rgb)}"
