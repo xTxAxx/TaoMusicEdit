@@ -91,6 +91,13 @@ def detect_onset(
 ) -> OnsetResult:
     """执行反向跳帧 + 局部细化检测。
 
+    .. note::
+       当前 Web UI / CLI 链路只使用对称的 :func:`detect_offset`（定位目标区域
+       *结尾*，即游戏加载动画结束、正片开始的那一帧）。本函数是「定位起始帧」
+       的对称公共 API：算法与本模块 docstring 均以 onset 为主线描述，并由
+       ``test_algorithm.py`` 单元测试覆盖，供「裁掉片头」等反向场景复用。
+       若确认项目内外均无此需求，可连同其测试一并移除。
+
     :param probe_time: 时间(秒) -> 该时刻帧是否命中
     :param scan_frames: 区间(t0, t1) -> 区间内逐帧信息列表（须含 frame_index / timestamp / matched）
     :param search_window: 检测窗口（秒）

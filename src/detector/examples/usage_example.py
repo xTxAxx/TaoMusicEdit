@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
 """detector 模块使用示例。
 
-运行方式（在项目根目录）::
+运行方式（任意工作目录均可，脚本会自动定位仓库根与测试素材）::
 
-    py src\\detector\\examples\\usage_example.py
+    py src\\detector\\examples\\usage_example.py            # 自动查找测试视频
+    py src\\detector\\examples\\usage_example.py <视频路径>  # 显式指定
 """
 import os
 import sys
 
 # 保证可独立运行：将 src 目录加入模块搜索路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_SRC = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+# 仓库根目录（本文件位于 <repo>/src/detector/examples/）
+_REPO_ROOT = os.path.dirname(_SRC)
 
 from detector import DetectorConfig, VideoColorDetector, hex_to_rgb
 
@@ -71,10 +76,27 @@ def custom_config(video_path):
     print(f"  frame={frame} time={time}")
 
 
+def _pick_video():
+    """定位可用测试视频：命令行参数 > 仓库根目录约定名 input*.mp4 > 根目录任意 .mp4。"""
+    if len(sys.argv) > 1:
+        return sys.argv[1]
+    for name in ("input1.mp4", "input2.mp4", "input3.mp4"):
+        path = os.path.join(_REPO_ROOT, name)
+        if os.path.isfile(path):
+            return path
+    # 回退：仓库实际素材为「编号_标题_*.mp4」命名，取第一个 mp4
+    try:
+        hits = sorted(f for f in os.listdir(_REPO_ROOT) if f.lower().endswith(".mp4"))
+    except OSError:
+        hits = []
+    return os.path.join(_REPO_ROOT, hits[0]) if hits else None
+
+
 def main():
-    video = sys.argv[1] if len(sys.argv) > 1 else "input1.mp4"
-    if not os.path.isfile(video):
-        print(f"未找到视频文件: {video}")
+    video = _pick_video()
+    if video is None or not os.path.isfile(video):
+        print("未找到测试视频：请在仓库根目录放入 input1.mp4（或任意 .mp4 素材），")
+        print("或显式传入路径：py src\\detector\\examples\\usage_example.py <视频路径>")
         return
     basic_usage(video)
     object_access(video)

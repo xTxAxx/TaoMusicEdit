@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """trimmer Python API 使用示例。
 
-运行方式（在仓库根目录执行）:
+运行方式（任意工作目录均可，脚本会自动定位仓库根与测试素材）:
     python src/trimmer/examples/usage_example.py
 """
 
@@ -16,9 +16,26 @@ if _SRC not in sys.path:
 from trimmer import OutputMode, Trimmer, TrimmerConfig
 from trimmer.core.errors import TrimmerError
 
-# 自动定位仓库根目录下的测试视频
-_CANDIDATES = ["input1.mp4", "../input1.mp4", "../../input1.mp4", "../../../input1.mp4"]
-_VIDEO = next((p for p in _CANDIDATES if os.path.isfile(p)), None)
+# 自动定位仓库根目录下的测试视频：优先约定名 input*.mp4，
+# 其次回退到根目录任意 .mp4（本仓库素材为「编号_标题_*.mp4」命名）。
+# 以脚本自身位置推导仓库根，避免受当前工作目录影响而误命中仓库外的同名文件。
+_REPO_ROOT = os.path.dirname(_SRC)
+
+
+def _find_video():
+    """在仓库根目录查找测试视频：约定名优先，其次任意 mp4；找不到返回 None。"""
+    for name in ("input1.mp4", "input2.mp4", "input3.mp4"):
+        path = os.path.join(_REPO_ROOT, name)
+        if os.path.isfile(path):
+            return path
+    try:
+        hits = sorted(f for f in os.listdir(_REPO_ROOT) if f.lower().endswith(".mp4"))
+    except OSError:
+        hits = []
+    return os.path.join(_REPO_ROOT, hits[0]) if hits else None
+
+
+_VIDEO = _find_video()
 # 示例输出统一放到本目录的 output 文件夹，避免污染仓库根目录
 _OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
@@ -30,7 +47,7 @@ def _on_progress(pct, seconds):
 
 def _pick_video():
     if _VIDEO is None:
-        print("未找到测试视频 input1.mp4，请将其放到仓库根目录后重试。")
+        print("未找到测试视频：请在仓库根目录放入 input1.mp4（或任意 .mp4 素材）后重试。")
         sys.exit(1)
     return _VIDEO
 
