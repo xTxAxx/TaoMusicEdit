@@ -37,7 +37,7 @@ src/webui/detect_cache.db
 src/webui/detect_cache.db-shm
 src/webui/detect_cache.db-wal
 
-# JSON 缓存迁移遗留文件
+# 更早版本遗留的 JSON 缓存（迁移代码已移除，保留忽略规则以防误入库）
 src/webui/detect_cache.json
 src/webui/detect_cache.json.migrated
 
@@ -61,7 +61,7 @@ src/trimmer/examples/output/
 # *.avi
 
 # ============ 本地工作产物（仅存在于本地工作区，不入库） ============
-# 助手工作记忆目录，以及本地生成的代码审查报告
+# 助手工作记忆目录，以及按需生成的代码审查报告（如《代码冗余审查报告.md》）
 .workbuddy/
 代码冗余审查报告.md
 

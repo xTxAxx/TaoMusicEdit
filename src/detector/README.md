@@ -1,7 +1,8 @@
 # detector — 视频颜色检测模块
 
 基于 **Python + OpenCV + FFmpeg** 的可复用视频检测模块，采用 **「反向跳帧 + 局部细化」** 算法，
-检测视频前 40 秒内四个指定位置的颜色是否为 `#F7F10F`（置信度阈值 0.97），并精确定位颜色区域的**结尾帧（最后一个命中帧）**。
+检测视频前 40 秒内各指定检测点的颜色是否为 `#F7F10F`（置信度阈值 0.97），并精确定位颜色区域的**结尾帧（最后一个命中帧）**。
+检测点默认取四角，数量与坐标均可配置。
 
 模块封装良好、接口规范，可直接 `import detector` 集成到其他项目。
 
@@ -10,13 +11,14 @@
 ## 1. 功能特性
 
 - **反向跳帧 + 局部细化**：先以 5s 大步长反向抽帧快速定位颜色区域，再以 1s 小步长细化，最后逐帧扫描精确定位**结尾帧（最后一个命中帧）**；全程只解码约 40~50 帧，**不整片解码**。
-- **四点联合判定**：默认检测 `(20,20) (1900,20) (20,1060) (1900,1060)` 四个角点，四角同时命中才算匹配。
+- **多点联合判定**：默认检测 `(20,20) (1900,20) (20,1060) (1900,1060)` 四个角点，
+  全部检测点同时命中才算匹配；检测点数量与坐标均可自定义。
 - **坐标自动适配**：检测点坐标按视频分辨率等比缩放（默认参考 1920×1080），支持任意分辨率与编码。
 - **颜色置信度 + 可配置容差**：提供 0~1 的连续置信度，严格阈值 0.97，并开放颜色容差接口以兼容有损编码的颜色偏差。
 - **FFmpeg 精确抽帧**：通过 `ffmpeg -ss` 输入定位 + 单帧解码抽帧，快速、精确；提供 OpenCV 提取器作为回退。
 - **进度回调与日志**：分阶段进度回调（0~1），结构化日志记录关键过程。
 - **完善的异常体系**：统一捕获 `DetectorError`，细分文件不存在 / 格式不支持 / FFmpeg 失败等异常。
-- **测试完备**：86 个单元 / 集成 / 性能测试全部通过。
+- **测试完备**：84 个单元 / 集成 / 性能测试（68 通过，16 个真实视频用例在缺少约定素材 `input*.mp4` 时自动跳过）。
 
 ---
 
@@ -119,11 +121,11 @@ if result.detected:
         print(f"点({p.x},{p.y}) RGB={p.rgb} conf={p.confidence:.4f} matched={p.matched}")
 ```
 
-运行示例脚本（项目根目录下）：
+运行示例脚本（可在任意工作目录执行，脚本会自行定位仓库内的视频素材）：
 
 ```bash
-py src\detector\examples\usage_example.py            # 使用默认视频 input1.mp4
-py src\detector\examples\usage_example.py input2.mp4 # 指定视频
+py src\detector\examples\usage_example.py            # 自动定位：input*.mp4 优先，其次仓库根任意 .mp4
+py src\detector\examples\usage_example.py input2.mp4 # 指定视频（相对路径按当前工作目录解析）
 ```
 
 运行测试：
@@ -136,7 +138,7 @@ py -m pytest
 
 ## 5. 算法说明（反向跳帧 + 局部细化）
 
-目标：在视频前 `search_window`（默认 40s）内，定位**四点同时命中目标颜色的结尾帧（offset，即最后一个命中帧）**。
+目标：在视频前 `search_window`（默认 40s）内，定位**各检测点同时命中目标颜色的结尾帧（offset，即最后一个命中帧）**。
 
 | 阶段 | 说明 |
 | --- | --- |
@@ -207,7 +209,7 @@ conf = color_confidence((245, 254, 19), rgb, tolerance=10.0)   # ≈ 1.0
 | `coarse_step` | `float` | `5.0` | 初始大步长（秒/次） |
 | `fine_step` | `float` | `1.0` | 细化步长（秒/次） |
 | `extractor` | `str` | `"ffmpeg"` | 帧提取器：`"ffmpeg"` / `"opencv"` |
-| `hwaccel` | `str` | `"none"` | GPU 硬件解码策略：`auto`（按平台自动探测）/ `none`（CPU 软解）/ `d3d11va`、`dxva2`（Windows）/ `cuda`（N 卡）/ `qsv`（Intel 核显）/ `vaapi`（Linux）/ `videotoolbox`（macOS）；所选后端不可用时自动降级软解 |
+| `hwaccel` | `str` | `"auto"` | GPU 硬件解码策略：`auto`（按平台自动探测，默认）/ `none`（CPU 软解）/ `d3d11va`、`dxva2`（Windows）/ `cuda`（N 卡）/ `qsv`（Intel 核显）/ `vaapi`（Linux）/ `videotoolbox`（macOS）；所选后端不可用时自动降级软解 |
 | `ffmpeg_path` / `ffprobe_path` | `str` | `"ffmpeg"` / `"ffprobe"` | 可执行文件路径 |
 | `log_level` | `str` | `"INFO"` | 日志级别 |
 | `progress_callback` | `callable` | `None` | 全局进度回调（可被 `detect()` 参数覆盖） |
@@ -287,19 +289,20 @@ VideoColorDetector(config: DetectorConfig = None, **overrides)
 
 ## 10. 测试报告
 
-共 **86 个测试用例，全部通过**（`py -m pytest`）。
+共 **84 个测试用例**（`py -m pytest`）：本机实测 **68 通过、16 跳过**，
+跳过项全部是缺少约定素材 `input*.mp4` 的真实视频用例。
 
 | 文件 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
-| `tests/test_color.py` | 14 | 颜色转换、置信度度量、容差、阈值边界 |
-| `tests/test_config.py` | 19 | 默认值、参数校验（合法/非法）、覆盖、冲突 |
+| `tests/test_color.py` | 13 | 颜色转换、置信度度量、容差、阈值边界 |
+| `tests/test_config.py` | 18 | 默认值、参数校验（合法/非法）、覆盖、冲突 |
 | `tests/test_algorithm.py` | 20 | 核心算法：命中/未命中、精确起始帧、边界 onset；结尾帧（offset）、边界 offset、进度回调、参数校验 |
 | `tests/test_detector.py` | 20 | 合成视频端到端精确检测、真实视频检测、坐标缩放、异常处理、公共 API |
 | `tests/test_ffmpeg.py` | 10 | ffprobe 元数据、单帧/区间抽取、合成视频无损抽取、两种提取器 |
 | `tests/test_performance.py` | 3 | 单帧抽取速度、整体耗时、探测帧数上界（验证不整片解码） |
 
 真实视频（`input1/2/3.mp4`）检测结果一致：结尾帧分别为 **frame=734/767/747（t≈24.47/25.57/24.90s）**，
-位于调研确定的 [24,26]s 区间内，四点置信度均 ≥0.97。
+位于调研确定的 [24,26]s 区间内，各检测点置信度均 ≥0.97。
 
 > 注：真实视频用例在缺少 `input*.mp4` 时会自动跳过（`REQUIRE_REAL` 标记）；
 > 合成视频用例始终运行，保证 CI 下核心功能可验证。
