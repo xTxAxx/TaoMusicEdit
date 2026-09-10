@@ -52,6 +52,11 @@ DEFAULT_DETECT_CACHE = {
     "skip_cached": False,
 }
 
+#: 批处理设置默认值：workers 并发数（0 = 自动按 CPU 核数）
+DEFAULT_BATCH = {
+    "workers": 0,
+}
+
 
 def defaults() -> dict:
     """返回一份全新的默认设置。workspace/output_dir 为空表示使用项目根目录。"""
@@ -61,6 +66,7 @@ def defaults() -> dict:
         "detector": dict(DEFAULT_DETECTOR),
         "trimmer": dict(DEFAULT_TRIMMER),
         "detect_cache": dict(DEFAULT_DETECT_CACHE),
+        "batch": dict(DEFAULT_BATCH),
     }
 
 
@@ -88,6 +94,12 @@ def _merge(base: dict, data: dict) -> dict:
                 base["detect_cache"]["limit"] = max(0, int(dc["limit"]))
             except (TypeError, ValueError):
                 pass
+    batch = data.get("batch")
+    if isinstance(batch, dict) and "workers" in batch:
+        try:
+            base["batch"]["workers"] = max(0, min(16, int(batch["workers"])))
+        except (TypeError, ValueError):
+            pass
     return base
 
 

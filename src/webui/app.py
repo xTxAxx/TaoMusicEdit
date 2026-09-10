@@ -891,7 +891,18 @@ def api_detect():
 
 
 def _parallel_workers() -> int:
-    """批处理文件级并行度：默认 min(CPU 核数, 4)；可用环境变量 TAOMUSIC_BATCH_WORKERS 覆盖。"""
+    """批处理文件级并行度。
+
+    优先级：设置中的 batch.workers（界面「批处理 → 并发数」，0 = 自动）
+    → 环境变量 TAOMUSIC_BATCH_WORKERS → 默认 min(CPU 核数, 4)。
+    """
+    try:
+        saved = settings_mod.load()
+        workers = int(saved.get("batch", {}).get("workers") or 0)
+        if workers > 0:
+            return min(16, workers)
+    except (TypeError, ValueError):
+        pass
     try:
         env = int(os.environ.get("TAOMUSIC_BATCH_WORKERS", "0"))
         if env > 0:

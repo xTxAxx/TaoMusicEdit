@@ -404,19 +404,12 @@ input[type="number"] {
 .param-tip { grid-column: 1 / -1; font-size: 11.5px; color: var(--ok); }
 
 /* ---------------- 检测缓存设置 ---------------- */
-.cache-panel {
-  margin-top: 14px; padding-top: 10px;
-  border-top: 1px dashed var(--border);
-}
-.cache-head {
-  font-size: 12px; font-weight: 700; color: var(--text-dim);
-  letter-spacing: 0.5px; margin-bottom: 8px;
-}
+.cache-panel { margin-top: 2px; }
 .cache-stats { font-size: 11.5px; }
 .cache-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-/* 批量按钮下方的"跳过已缓存"选项 */
-.skip-cached-row { display: flex; margin-top: 8px; padding-bottom: 0; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
+/* 批处理设置：跳过已缓存 */
+.skip-cached-row { display: flex; margin-top: 2px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
 
 /* ---------------- 进度 / 结果 ---------------- */
 .progress-wrap { margin-top: 10px; }
@@ -431,6 +424,34 @@ input[type="number"] {
   transition: width 0.25s;
 }
 .progress-wrap .btn.small { margin-top: 8px; }
+
+/* 批处理：每文件任务行（限高 + 滚动） */
+.batch-list {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 260px; overflow-y: auto; margin-top: 10px; padding-right: 2px;
+}
+.batch-row {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; background: var(--bg-soft);
+}
+.batch-row-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; font-size: 13px; margin-bottom: 5px;
+}
+.batch-row-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.batch-row-state { flex-shrink: 0; font-size: 12px; color: var(--text-dim); }
+.batch-row-bar {
+  height: 6px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 3px; overflow: hidden;
+}
+.batch-row-bar .progress-fill { transition: width 0.2s; }
+.batch-log { margin-top: 4px; font-size: 11px; color: var(--text-dim); line-height: 1.55; }
+.batch-log div { margin-top: 1px; }
+.batch-log div:first-child { margin-top: 0; }
+.batch-row.done .batch-row-bar .progress-fill { background: linear-gradient(90deg, var(--ok), var(--accent-2)); }
+.batch-row.fail .batch-row-bar .progress-fill { background: linear-gradient(90deg, var(--bad), var(--bad)); }
 
 .result { margin-top: 10px; font-size: 12.5px; }
 .result-msg { padding: 8px 10px; border-radius: 7px; font-weight: 600; }

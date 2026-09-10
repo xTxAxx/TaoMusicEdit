@@ -11,6 +11,7 @@ const state = {
   sel: new Set(),          // 批处理选择的视频路径集合
   selAnchor: null,         // shift 区选的锚点路径
   batchDetectResults: {},  // 批量 Detect 结果缓存 { path: result }
+  batchRows: new Map(),    // 批量任务行 { index(1基): {row,fill,st,log} }
 };
 
 // ---------------- 工具 ----------------
@@ -387,6 +388,20 @@ function initCacheSettingsUI(saved) {
   });
 }
 
+// ---------------- 批处理设置（并发数） ----------------
+// 并发数 0 = 自动按 CPU 核数；改动即随参数面板一起持久化到 settings.json
+function initBatchWorkersUI(saved) {
+  const inp = document.getElementById("param-batch_workers");
+  if (!inp) return;
+  const w = (saved && saved.batch && saved.batch.workers) || 0;
+  inp.value = String(w);
+  inp.addEventListener("change", () => {
+    const n = Math.max(0, Math.min(16, Math.floor(Number(inp.value) || 0)));
+    inp.value = String(n);
+    scheduleSave();
+  });
+}
+
 // ---------------- 输出目录 ----------------
 async function refreshOutput() {
   const res = await fetch("/api/output-dir");
@@ -564,7 +579,7 @@ async function runTrim() {
 
 // ---------------- 批处理流程 ----------------
 // 批处理统一使用一个「批处理」卡片，不再区分批量检测 / 批量裁剪
-function openBatchPanel(title, count) {
+function openBatchPanel(title, count, files) {
   const t = document.getElementById("batchTitle");
   if (t) t.textContent = title + " · " + count + " 个文件";
   const box = document.getElementById("batchResult");
@@ -575,6 +590,7 @@ function openBatchPanel(title, count) {
   if (fill) fill.style.width = "0%";
   const label = document.getElementById("batchProgressLabel");
   if (label) label.textContent = "";
+  initBatchRows(files || []);
 }
 
 function setBatchBusy(busy) {
@@ -591,6 +607,121 @@ function setBatchBusy(busy) {
   updateActions();
 }
 
+// ---------------- 批处理任务行（每文件：进度条 + 多行日志） ----------------
+// files 为 detect 的 string[] 或 trim 的 {path, skip?, reason?}[]，按入参顺序建行。
+function initBatchRows(files) {
+  resetBatchList();
+  const list = document.getElementById("batchList");
+  if (!list) return;
+  files.forEach((f, i) => {
+    const path = typeof f === "string" ? f : (f && f.path) || "";
+    const skip = !!(f && f.skip);
+    const reason = (f && f.reason) || "";
+    const idx = i + 1;
+
+    const row = document.createElement("div");
+    row.className = "batch-row" + (skip ? " skip" : "");
+    row.dataset.idx = String(idx);
+
+    const head = document.createElement("div");
+    head.className = "batch-row-head";
+    const name = document.createElement("div");
+    name.className = "batch-row-name";
+    name.textContent = basename(path) || "(未知)";
+    name.title = path;
+    const st = document.createElement("div");
+    st.className = "batch-row-state";
+    st.textContent = skip ? "已跳过" : "等待中";
+    head.appendChild(name);
+    head.appendChild(st);
+
+    const bar = document.createElement("div");
+    bar.className = "batch-row-bar";
+    const fill = document.createElement("div");
+    fill.className = "progress-fill";
+    bar.appendChild(fill);
+
+    const log = document.createElement("div");
+    log.className = "batch-log";
+    if (skip) {
+      const d = document.createElement("div");
+      d.textContent = reason || "已跳过";
+      log.appendChild(d);
+    }
+
+    row.appendChild(head);
+    row.appendChild(bar);
+    row.appendChild(log);
+    list.appendChild(row);
+    state.batchRows.set(idx, { row, fill, st, log });
+  });
+}
+
+function resetBatchList() {
+  state.batchRows.clear();
+  const list = document.getElementById("batchList");
+  if (list) list.innerHTML = "";
+}
+
+// 根据 SSE 进度事件更新对应任务行（键 = index，天然幂等，容忍事件交错/重连重放）
+function batchRowUpdate(p) {
+  const item = state.batchRows.get(Number(p.index));
+  if (!item) return;
+  let f;
+  if (p.progress != null) f = p.progress * 100;        // detect 单文件进度 0-1
+  else if (p.percent_file != null) f = p.percent_file; // trim 单文件进度 0-100
+  else f = p.percent != null ? p.percent : 0;          // 兜底整体进度
+  item.fill.style.width = Math.max(0, Math.min(100, f)) + "%";
+  const stageName = {
+    coarse: "粗扫", fine: "细化", precise: "逐帧", fallback: "兜底细扫",
+    locate: "定位", done: "完成",
+  }[p.stage] || "";
+  const txt = (stageName && p.message && p.message !== stageName)
+    ? stageName + "：" + p.message
+    : (stageName || p.message || "");
+  item.st.textContent = txt;
+  if (txt) batchRowLog(Number(p.index), txt);
+}
+
+// 行内追加一条日志，最多保留 8 条（超出移除最旧）
+function batchRowLog(idx, txt) {
+  const item = state.batchRows.get(idx);
+  if (!item) return;
+  const d = document.createElement("div");
+  d.textContent = txt;
+  item.log.appendChild(d);
+  while (item.log.children.length > 8) item.log.removeChild(item.log.firstChild);
+}
+
+// 批量结束后按入参顺序把每行切换为最终结果（detect: detected/frame/timestamp；trim: ok/output_files）
+function batchRowFinalize(results) {
+  (results || []).forEach((r, i) => {
+    const item = state.batchRows.get(i + 1);
+    if (!item) return;
+    const name = item.row.querySelector(".batch-row-name");
+    if (name && r.file) { name.textContent = basename(r.file); name.title = r.file; }
+    let txt = "";
+    let cls = "done";
+    if (r.error) {
+      txt = "✗ " + r.error;
+      cls = "fail";
+      if (!item.log.children.length) batchRowLog(i + 1, r.error);
+    } else if (r.detected) {
+      const t = (r.timestamp != null) ? r.timestamp.toFixed(3) + "s" : "?";
+      txt = "✓ 帧#" + (r.frame + 1) + " @ " + t;
+      if (r.skipped) batchRowLog(i + 1, "已使用缓存结果");
+    } else if (r.ok) {
+      txt = "✓ 裁剪完成";
+      (r.output_files || []).forEach((of) => batchRowLog(i + 1, "↳ " + basename(of)));
+    } else {
+      txt = "未命中";
+    }
+    item.st.textContent = txt;
+    item.fill.style.width = "100%";
+    item.row.classList.add(cls);
+  });
+}
+
 async function runBatchDetect() {
   const files = [...state.sel];
   if (!files.length) { toast("warn", "请先在工作区选择视频文件（Ctrl 单选 / Shift 区选 / 全选）"); return; }
@@ -600,7 +731,7 @@ async function runBatchDetect() {
     v.errors.forEach((m) => toast("error", m));
     return;
   }
-  openBatchPanel("批量检测", files.length);
+  openBatchPanel("批量检测", files.length, files);
   setBatchBusy(true);
   setStatus("批量检测中…");
   try {
@@ -647,7 +778,7 @@ async function runBatchTrim() {
     }
   }
   if (!usable) { toast("warn", "没有可用于批量裁剪的检测结果，请先执行批量检测"); return; }
-  openBatchPanel("批量裁剪", items.length);
+  openBatchPanel("批量裁剪", items.length, items);
   setBatchBusy(true);
   setStatus("批量裁剪中…");
   try {
@@ -801,6 +932,7 @@ function onBatchDetectProgress(p) {
   if (label) label.textContent =
     "批量检测 " + (p.index || 0) + "/" + (p.total || 0) + " · " +
     basename(p.file || "") + " · " + stageName + " " + pct + "%";
+  batchRowUpdate(p);
 }
 
 function onBatchTrimProgress(p) {
@@ -811,6 +943,7 @@ function onBatchTrimProgress(p) {
   if (label) label.textContent =
     "批量裁剪 " + (p.index || 0) + "/" + (p.total || 0) + " · " +
     basename(p.file || "") + " " + pct + "%";
+  batchRowUpdate(p);
 }
 
 function onBatchDetectDone(data) {
@@ -819,6 +952,7 @@ function onBatchDetectDone(data) {
   const map = {};
   results.forEach((r) => { if (r && r.file) map[r.file] = r; });
   state.batchDetectResults = map;
+  batchRowFinalize(results);
   renderBatchDetectResults(results, data.summary);
   const s = data.summary || {};
   toast("success", "批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) +
@@ -830,7 +964,9 @@ function onBatchDetectDone(data) {
 
 function onBatchTrimDone(data) {
   setBatchBusy(false);
-  renderBatchTrimResults(data.results || [], data.summary);
+  const results = data.results || [];
+  batchRowFinalize(results);
+  renderBatchTrimResults(results, data.summary);
   const s = data.summary || {};
   toast("success", "批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) +
     (s.failed ? "，失败 " + s.failed : ""));
@@ -838,43 +974,25 @@ function onBatchTrimDone(data) {
   updateActions();
 }
 
+// 批量结果汇总行（逐文件终态已写入各自任务行）
 function renderBatchDetectResults(results, summary) {
   const box = document.getElementById("batchResult");
   if (!box) return;
   const s = summary || {};
-  const rows = results.map((r) => {
-    const name = esc(basename(r.file || ""));
-    if (r.error) return "<li><b>" + name + "</b> <span class='bad'>✗ " + esc(r.error) + "</span></li>";
-    if (r.detected) {
-      const t = (r.timestamp !== null && r.timestamp !== undefined) ? r.timestamp.toFixed(3) + "s" : "?";
-      return "<li><b>" + name + "</b> <span class='ok'>✓ 帧#" + (r.frame + 1) + " @ " + t + "</span></li>";
-    }
-    return "<li><b>" + name + "</b> <span class='bad'>未命中</span></li>";
-  }).join("");
   box.innerHTML =
     '<div class="result-msg ' + (s.failed ? "warn" : "ok") + '">批量检测完成：命中 ' +
     (s.detected || 0) + " / " + (s.total || 0) +
-    (s.failed ? "，失败 " + s.failed : "") + "</div>" +
-    (rows ? "<ul class='points'>" + rows + "</ul>" : "");
+    (s.failed ? "，失败 " + s.failed : "") + "</div>";
 }
 
 function renderBatchTrimResults(results, summary) {
   const box = document.getElementById("batchResult");
   if (!box) return;
   const s = summary || {};
-  const rows = results.map((r) => {
-    const name = esc(basename(r.file || ""));
-    if (r.error) return "<li><b>" + name + "</b> <span class='bad'>✗ " + esc(r.error) + "</span></li>";
-    const files = (r.output_files || []).map((f) =>
-      "<div class='out-sub'>↳ " + esc(basename(f)) + "</div>"
-    ).join("");
-    return "<li><b>" + name + "</b> <span class='ok'>✓ 裁剪完成</span>" + files + "</li>";
-  }).join("");
   box.innerHTML =
     '<div class="result-msg ' + (s.failed ? "warn" : "ok") + '">批量裁剪完成：成功 ' +
     (s.ok || 0) + " / " + (s.total || 0) +
-    (s.failed ? "，失败 " + s.failed : "") + "</div>" +
-    (rows ? "<ul class='points'>" + rows + "</ul>" : "");
+    (s.failed ? "，失败 " + s.failed : "") + "</div>";
 }
 
 // ---------------- 结果展示 ----------------
@@ -1020,11 +1138,17 @@ async function saveSettings() {
   delete trimmer.start_value;
   delete trimmer.end_mode;
   delete trimmer.end_value;
+  const batchWorkersEl = document.getElementById("param-batch_workers");
   const payload = {
     workspace: state.workspace || "",
     output_dir: state.outputDir || "",
     detector: collectParams(DETECTOR_PARAMS),
     trimmer,
+    batch: {
+      workers: batchWorkersEl
+        ? Math.max(0, Math.min(16, Math.floor(Number(batchWorkersEl.value) || 0)))
+        : 0,
+    },
   };
   try {
     await fetch("/api/settings", {
@@ -1046,6 +1170,11 @@ async function resetSettings() {
     buildParamsForm(document.getElementById("detectParams"), DETECTOR_PARAMS, s.detector);
     buildParamsForm(document.getElementById("trimParams"), TRIM_PARAMS, s.trimmer);
     initTrimEndControls();  // 表单重建后重新绑定终点方式联动（终点默认「无」）
+    // 批处理 / 缓存卡片控件不随 buildParamsForm 重建，手动恢复默认
+    const skipCached = document.getElementById("skipCached");
+    if (skipCached) skipCached.checked = false;
+    const batchWorkers = document.getElementById("param-batch_workers");
+    if (batchWorkers) batchWorkers.value = "0";
     await refreshWorkspace();
     await refreshOutput();
     updateActions();
@@ -1133,6 +1262,7 @@ async function initApp() {
   // 恢复持久化检测缓存：刷新 / 重启后选视频即可自动匹配上次检测结果
   await hydrateDetectCache();
   initCacheSettingsUI(saved);
+  initBatchWorkersUI(saved);
   wireUI();
   window.__onTrimParamFilled = (key) => {
     document.getElementById("panelTrim").scrollIntoView({ behavior: "smooth", block: "nearest" });

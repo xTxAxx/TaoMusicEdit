@@ -46,9 +46,16 @@
     <section class="card">
       <div class="card-head"><h2>颜色检测</h2></div>
       <div class="params" id="detectParams"></div>
+    </section>
 
+    <section class="card">
+      <div class="card-head"><h2>视频裁剪</h2></div>
+      <div class="params" id="trimParams"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>检测结果缓存</h2></div>
       <div class="cache-panel">
-        <div class="cache-head">检测结果缓存</div>
         <div class="param-row" data-key="cache_enabled">
           <label class="param-label" for="param-cache_enabled">缓存开关</label>
           <div class="param-ctl">
@@ -79,8 +86,17 @@
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>视频裁剪</h2></div>
-      <div class="params" id="trimParams"></div>
+      <div class="card-head"><h2>批处理</h2></div>
+      <label class="chk skip-cached-row" title="勾选后，批量检测将自动跳过缓存库中已有有效结果的视频">
+        <input type="checkbox" id="skipCached"> 跳过已缓存的检测
+      </label>
+      <div class="param-row" data-key="batch_workers">
+        <label class="param-label" for="param-batch_workers">并发数</label>
+        <div class="param-ctl">
+          <input type="number" id="param-batch_workers" min="0" max="16" step="1" placeholder="0">
+        </div>
+        <div class="param-desc">批量检测 / 裁剪同时处理的任务数；0 = 自动按 CPU 核数</div>
+      </div>
     </section>
 
     <div class="sidebar-foot">
@@ -167,6 +183,7 @@
           <div class="progress-bar"><div class="progress-fill" id="batchProgressFill"></div></div>
           <button class="btn danger small" id="batchCancel">取消</button>
         </div>
+        <div class="batch-list" id="batchList"></div>
         <div class="result" id="batchResult"></div>
       </article>
     </div>
@@ -187,9 +204,6 @@
         <button class="btn small primary" id="btnBatchDetect" title="对选中的视频批量执行颜色检测">批量检测</button>
         <button class="btn small primary" id="btnBatchTrim" title="按批量检测结果对选中的视频批量裁剪">批量裁剪</button>
       </div>
-      <label class="chk skip-cached-row" title="勾选后，批量检测将自动跳过缓存库中已有有效结果的视频">
-        <input type="checkbox" id="skipCached"> 跳过已缓存的检测
-      </label>
       <div class="file-tree" id="fileTree">
         <div class="placeholder">尚未加载工作区</div>
       </div>
@@ -218,6 +232,6 @@
 
 <script src="/static/js/params.js?v=11"></script>
 <script src="/static/js/player.js?v=12"></script>
-<script src="/static/js/app.js?v=26"></script>
+<script src="/static/js/app.js?v=28"></script>
 </body>
 </html>

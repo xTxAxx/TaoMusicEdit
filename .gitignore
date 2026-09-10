@@ -51,8 +51,9 @@ src/trimmer/examples/output/
 /input1.mp4
 /input2.mp4
 /input3.mp4
-# 根目录测试视频（大体积二进制，不提交）
-/788_Omg*.mp4
+# 根目录测试视频及「批量裁剪」输出（大体积二进制，不提交）
+/*Omg*.mp4
+/*Omg*_trim.m4a
 # 如后续需要忽略任意目录下的视频素材，可取消下面注释：
 # *.mp4
 # *.mkv
