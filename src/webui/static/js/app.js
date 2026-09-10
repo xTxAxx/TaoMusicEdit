@@ -29,10 +29,6 @@ function basename(p) {
   return String(p).split(/[\\/]/).pop();
 }
 
-// ---------------- Toast 反馈（已停用：按需求不再显示右下角提示） ----------------
-function toast(_type, _message) { /* no-op */ }
-window.toast = toast;
-
 function setStatus(text) {
   const el = document.getElementById("topStatus");
   if (el) el.textContent = text;
@@ -44,11 +40,11 @@ async function refreshWorkspace() {
   const data = await res.json();
   if (data.path) {
     document.getElementById("workspacePath").value = data.path;
-    await loadWorkspace(data.path, false);
+    await loadWorkspace(data.path);
   }
 }
 
-async function loadWorkspace(path, notify = true) {
+async function loadWorkspace(path) {
   if (!path) return;
   const prevWs = state.workspace;
   const res = await fetch("/api/workspace", {
@@ -57,10 +53,7 @@ async function loadWorkspace(path, notify = true) {
     body: JSON.stringify({ path }),
   });
   const data = await res.json();
-  if (!data.ok) {
-    toast("error", "载入工作区失败：" + data.message);
-    return;
-  }
+  if (!data.ok) return;
   state.workspace = data.path;
   document.getElementById("workspacePath").value = data.path;
   const info = document.getElementById("workspaceInfo");
@@ -71,7 +64,6 @@ async function loadWorkspace(path, notify = true) {
   // 切换了工作区则清空批处理选择，否则重建树后恢复选择高亮
   if (prevWs && prevWs !== data.path) clearSelection();
   else renderSelection();
-  if (notify) toast("success", "已载入工作区：" + data.path);
   setStatus("工作区已载入，请选择视频");
   scheduleSave();
 }
@@ -187,7 +179,6 @@ function selectAll() {
   rows.forEach((r) => state.sel.add(r.path));
   state.selAnchor = rows.length ? rows[0].path : null;
   renderSelection();
-  toast("success", "已全选 " + rows.length + " 个视频");
 }
 
 function clearSelection() {
@@ -251,9 +242,6 @@ async function applyBatchResultForVideo(vpath) {
         (r.timestamp !== null && r.timestamp !== undefined ? r.timestamp.toFixed(3) : "?") + "s（可修改）";
       if (!row.querySelector(".param-tip")) row.appendChild(tip);
     }
-    toast("success",
-      "已匹配" + (cached ? "缓存检测结果" : "批量检测结果") + "：帧 #" +
-      (r.frame + 1) + "，已填入裁剪起点");
     setStatus("已载入检测结果，可查看或裁剪");
   } else {
     Player.clearDetected();
@@ -310,15 +298,8 @@ async function saveCacheConfig(patch) {
       body: JSON.stringify(patch),
     });
     const d = await res.json();
-    if (d.ok) {
-      renderCacheStats(d.count);
-      toast("ok", "缓存设置已保存");
-    } else {
-      toast("error", "保存失败：" + (d.message || "未知错误"));
-    }
-  } catch (e) {
-    toast("error", "保存失败：网络异常");
-  }
+    if (d.ok) renderCacheStats(d.count);
+  } catch (e) { /* 忽略：保存失败不阻塞本地交互 */ }
 }
 
 // 绑定缓存设置控件；saved 为 /api/settings 返回值（含 detect_cache 组）
@@ -365,14 +346,11 @@ function initCacheSettingsUI(saved) {
       const res = await fetch("/api/detect-cache/prune", { method: "POST" });
       const d = await res.json();
       if (d.ok) {
-        toast("ok", d.removed > 0
-          ? `已清理 ${d.removed} 条失效缓存`
-          : "没有需要清理的失效条目");
         // 同步移除本地批处理表中对应视频的结果
         for (const p of d.paths || []) delete state.batchDetectResults[p];
         renderCacheStats(d.count);
       }
-    } catch (e) { toast("error", "清理失败：网络异常"); }
+    } catch (e) { /* 忽略 */ }
   });
 
   document.getElementById("btnClearCache")?.addEventListener("click", async () => {
@@ -382,9 +360,8 @@ function initCacheSettingsUI(saved) {
       if (d.ok) {
         state.batchDetectResults = {};
         renderCacheStats(0);
-        toast("ok", `已清空缓存（原 ${d.removed} 条）`);
       }
-    } catch (e) { toast("error", "清空失败：网络异常"); }
+    } catch (e) { /* 忽略 */ }
   });
 }
 
@@ -422,14 +399,12 @@ async function setOutputDir(path) {
   });
   const data = await res.json();
   if (!data.ok) {
-    toast("error", "输出目录设置失败：" + data.message);
     renderOutputInfo({ path, writable: false, message: data.message });
     return;
   }
   state.outputDir = data.path;
   document.getElementById("outputPath").value = data.path;
   renderOutputInfo(data);
-  toast("success", "输出目录已设置：" + data.path);
   scheduleSave();
   updateActions();
 }
@@ -468,7 +443,7 @@ async function loadDirList(p) {
   if (!p) p = "";
   const res = await fetch("/api/list-dir?path=" + encodeURIComponent(p));
   const data = await res.json();
-  if (!data.ok) { toast("error", data.message); return; }
+  if (!data.ok) return;
   dirCurrent = data.path;
   document.getElementById("dirCurrent").textContent = data.path;
   const list = document.getElementById("dirList");
@@ -511,13 +486,11 @@ function chooseCurrentDir() {
 
 // ---------------- 检测流程 ----------------
 async function runDetect() {
-  if (state.jobs.detect) { toast("warn", "检测任务正在运行中，请稍候"); return; }
-  if (!state.currentVideo) { toast("warn", "请先在文件列表中选择视频"); return; }
+  // 前置校验不通过时静默返回（失败反馈由任务中心 / 状态栏承担，不再弹右下角提示）
+  if (state.jobs.detect) return;
+  if (!state.currentVideo) return;
   const v = validateDetect(state);
-  if (v.errors.length) {
-    v.errors.forEach((m) => toast("error", m));
-    return;
-  }
+  if (v.errors.length) return;
   setStatus("检测中…");
   const task = addTask("detect", state.currentVideo,
     { path: state.currentVideo, params: v.params });
@@ -541,14 +514,12 @@ async function runDetect() {
 
 // ---------------- 裁剪流程 ----------------
 async function runTrim() {
-  if (state.jobs.trim) { toast("warn", "裁剪任务正在运行中，请稍候"); return; }
-  if (!state.currentVideo) { toast("warn", "请先在文件列表中选择视频"); return; }
-  if (!state.outputDir) { toast("warn", "请先设置输出目录"); return; }
+  // 前置校验不通过时静默返回（失败反馈由任务中心 / 状态栏承担，不再弹右下角提示）
+  if (state.jobs.trim) return;
+  if (!state.currentVideo) return;
+  if (!state.outputDir) return;
   const v = validateTrim(state);
-  if (v.errors.length) {
-    v.errors.forEach((m) => toast("error", m));
-    return;
-  }
+  if (v.errors.length) return;
   setStatus("裁剪中…");
   const task = addTask("trim", state.currentVideo,
     { path: state.currentVideo, output_dir: state.outputDir, params: v.params });
@@ -1012,10 +983,11 @@ async function retryTrimTask(t) {
 // ---------------- 批量流程 ----------------
 async function runBatchDetect() {
   const files = [...state.sel];
-  if (!files.length) { toast("warn", "请先在工作区选择视频文件（Ctrl 单选 / Shift 区选 / 全选）"); return; }
-  if (state.jobs.batch) { toast("warn", "批处理任务正在运行中，请稍候"); return; }
+  // 前置校验不通过时静默返回（失败反馈由任务中心 / 状态栏承担）
+  if (!files.length) return;
+  if (state.jobs.batch) return;
   const v = validateDetect(state);
-  if (v.errors.length) { v.errors.forEach((m) => toast("error", m)); return; }
+  if (v.errors.length) return;
   setStatus("批量检测中…");
   const tasks = files.map((f, i) => addTask("detect", f, { path: f, params: v.params, index: i + 1 }));
   try {
@@ -1041,12 +1013,13 @@ async function runBatchDetect() {
 
 async function runBatchTrim() {
   const files = [...state.sel];
-  if (!files.length) { toast("warn", "请先在工作区选择视频文件（Ctrl 单选 / Shift 区选 / 全选）"); return; }
-  if (state.jobs.batch) { toast("warn", "批处理任务正在运行中，请稍候"); return; }
-  if (!state.outputDir) { toast("warn", "请先设置输出目录"); return; }
+  // 前置校验不通过时静默返回（失败反馈由任务中心 / 状态栏承担）
+  if (!files.length) return;
+  if (state.jobs.batch) return;
+  if (!state.outputDir) return;
   // 批量裁剪不使用终点（以检测结果为起点、保留到片尾），跳过终点校验
   const v = validateTrim(state, false);
-  if (v.errors.length) { v.errors.forEach((m) => toast("error", m)); return; }
+  if (v.errors.length) return;
   // 批量裁剪始终使用批量检测的输出结果作为每个文件的裁剪起点
   const items = [];
   let usable = 0;
@@ -1055,7 +1028,7 @@ async function runBatchTrim() {
     if (r && r.detected && r.frame !== null && r.frame !== undefined) { items.push({ path: f, frame: r.frame + 1 }); usable++; }
     else items.push({ path: f, skip: true, reason: "无检测结果（未命中或未执行批量检测）" });
   }
-  if (!usable) { toast("warn", "没有可用于批量裁剪的检测结果，请先执行批量检测"); return; }
+  if (!usable) return;
   setStatus("批量裁剪中…");
   const tasks = files.map((f, i) => {
     const r = state.batchDetectResults[f];
@@ -1227,7 +1200,6 @@ function handleJobDone(ctx, data) {
     if (!t) return;
     const r = finalizeItemResult(data, "trim");
     finalizeTask(t, r.status, r.lines, data);
-    toast("success", "裁剪完成，共 " + (data.output_files || []).length + " 个输出文件");
     setStatus("裁剪完成");
     return;
   }
@@ -1244,8 +1216,6 @@ function handleJobDone(ctx, data) {
     });
     const s = data.summary || {};
     setStatus("批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
-    toast("success", "批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) +
-      (s.skipped ? "，跳过已缓存 " + s.skipped : "") + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
     collapseBatch(ctx);
     return;
   }
@@ -1259,20 +1229,17 @@ function handleJobDone(ctx, data) {
   });
   const s = data.summary || {};
   setStatus("批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
-  toast("success", "批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
   collapseBatch(ctx);
 }
 
 function handleJobError(ctx, data) {
   ctx.tasks.forEach((t) => finalizeTask(t, "fail", ["✗ " + (data.message || "任务执行失败")], null, data.message));
-  toast("error", data.message || "任务执行失败");
   setStatus("任务失败");
   collapseBatch(ctx);
 }
 
 function handleJobCancelled(ctx) {
   ctx.tasks.forEach((t) => finalizeTask(t, "cancelled", ["任务已取消"]));
-  toast("info", "任务已取消");
   setStatus("任务已取消");
   collapseBatch(ctx);
 }
@@ -1296,13 +1263,9 @@ function applyDetectSideEffects(data) {
       if (!row.querySelector(".param-tip")) row.appendChild(tip);
     }
     setStatus("检测完成，已自动关联裁剪起点");
-    toast("success",
-      "检测成功：目标帧 #" + (data.frame + 1) + " @ " +
-      (data.timestamp ? data.timestamp.toFixed(3) : "?") + "s，已自动填入裁剪起点");
   } else {
     Player.clearDetected();
     setStatus("检测完成（未命中）");
-    toast("warn", "未检测到目标颜色：" + (data.message || ""));
   }
 }
 
@@ -1407,7 +1370,7 @@ async function resetSettings() {
   try {
     const res = await fetch("/api/settings/reset", { method: "POST" });
     const data = await res.json();
-    if (!data.ok) { toast("error", data.message || "恢复默认设置失败"); return; }
+    if (!data.ok) return;
     const s = data.settings || {};
     buildParamsForm(document.getElementById("detectParams"), DETECTOR_PARAMS, s.detector);
     buildParamsForm(document.getElementById("trimParams"), TRIM_PARAMS, s.trimmer);
@@ -1420,11 +1383,8 @@ async function resetSettings() {
     await refreshWorkspace();
     await refreshOutput();
     updateActions();
-    toast("success", "已恢复默认设置");
     setStatus("已恢复默认设置");
-  } catch (e) {
-    toast("error", "网络错误：" + e.message);
-  }
+  } catch (e) { /* 忽略：重置失败时页面保持原状 */ }
 }
 
 // ---------------- 事件绑定 ----------------

@@ -111,12 +111,6 @@ const Player = (function () {
       els.btnPlay.textContent = "播放";
     });
     els.video.addEventListener("ended", () => { els.btnPlay.textContent = "播放"; });
-    els.video.addEventListener("error", () => {
-      if (els.video.src && !els.video.currentSrc) {
-        window.toast && toast("error", "浏览器无法播放该视频（可能编码不受支持）");
-      }
-    });
-
     initScrubber();
     initZoomScroll();
     initScrubZoom();
@@ -164,10 +158,6 @@ const Player = (function () {
         loadWaveform();
         return data;
       })
-      .catch((err) => {
-        window.toast && toast("error", "加载视频失败：" + err.message);
-        throw err;
-      })
       .finally(() => { els.playerLoading.hidden = true; });
   }
 
@@ -178,7 +168,7 @@ const Player = (function () {
 
   // ---------------- 播放控制 ----------------
   function togglePlay() {
-    if (!info || !path) { window.toast && toast("warn", "请先在文件列表中选择视频"); return; }
+    if (!info || !path) return;
     if (exactImg) {
       exactImg = null;
       setVideoTime(currentTime);
@@ -201,7 +191,7 @@ const Player = (function () {
 
   // ---------------- 帧精确控制 ----------------
   function stepFrames(delta) {
-    if (!info || !path) { window.toast && toast("warn", "请先选择视频"); return; }
+    if (!info || !path) return;
     if (stepBusy) { stepPending += delta; return; }
     const fps = info.fps || 30;
     const total = totalFrames();
@@ -220,7 +210,7 @@ const Player = (function () {
         updateHud();
         render();
       })
-      .catch((err) => { window.toast && toast("error", "帧加载失败：" + err.message); })
+      .catch(() => { /* 帧加载失败：静默，finally 会复位 HUD */ })
       .finally(() => {
         stepBusy = false;
         hideHud();
@@ -255,7 +245,7 @@ const Player = (function () {
   // ---------------- 设为起点 ----------------
   // 读取当前播放帧，根据「起点方式」自动填入帧序号或时间戳到裁剪参数。
   function setAsStart() {
-    if (!info || !path) { window.toast && toast("warn", "请先选择视频"); return; }
+    if (!info || !path) return;
     const fps = info.fps || 30;
     const t = Math.max(0, currentTime);
     const frameOneBased = Math.round(t * fps) + 1;
@@ -266,10 +256,8 @@ const Player = (function () {
     fetchFrame(t).then((img) => { if (token === stepToken) { exactImg = img; render(); } }).catch(() => {});
     if (mode === "timestamp") {
       setParam("start_value", t.toFixed(6));
-      window.toast && toast("success", "已以当前帧时间戳 " + formatTime(t) + " 设为裁剪起点（-t）");
     } else {
       setParam("start_value", frameOneBased);
-      window.toast && toast("success", "已以当前帧 第 " + frameOneBased + " 帧 @ " + formatTime(t) + " 设为裁剪起点（-f）");
     }
     updateStartBadge();
     updateHud();
@@ -281,7 +269,7 @@ const Player = (function () {
   // 读取当前播放帧，根据「终点方式」自动填入帧序号或时间戳到裁剪参数；
   // 终点方式为「无（到片尾）」时自动沿用起点方式（两者保持相互独立，可事后修改）。
   function setAsEnd() {
-    if (!info || !path) { window.toast && toast("warn", "请先选择视频"); return; }
+    if (!info || !path) return;
     const fps = info.fps || 30;
     const t = Math.max(0, currentTime);
     const frameOneBased = Math.round(t * fps) + 1;
@@ -297,10 +285,8 @@ const Player = (function () {
     fetchFrame(t).then((img) => { if (token === stepToken) { exactImg = img; render(); } }).catch(() => {});
     if (mode === "timestamp") {
       setParam("end_value", t.toFixed(6));
-      window.toast && toast("success", "已以当前帧时间戳 " + formatTime(t) + " 设为裁剪终点（-T）");
     } else {
       setParam("end_value", frameOneBased);
-      window.toast && toast("success", "已以当前帧 第 " + frameOneBased + " 帧 @ " + formatTime(t) + " 设为裁剪终点（-F）");
     }
     updateEndBadge();
     updateHud();
@@ -340,12 +326,10 @@ const Player = (function () {
       } else {
         setParam("start_value", detectedMark.frameOneBased);
       }
-      window.toast && toast("success", "已回退到检测起点：第 " + detectedMark.frameOneBased + " 帧 @ " + formatTime(detectedMark.time));
     } else {
       startMark = null;
       setParam("start_mode", "frame");
       setParam("start_value", "");
-      window.toast && toast("info", "无检测起点，已清空裁剪起点");
     }
     updateStartBadge();
     updateHud();

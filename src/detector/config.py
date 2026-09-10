@@ -60,12 +60,12 @@ class DetectorConfig:
     extractor: str = "ffmpeg"
 
     #: GPU 硬件解码策略：
-    #: - "auto"  按平台自动探测（Windows: d3d11va → dxva2 → cuda → qsv）
-    #: - "none"  CPU 软解（默认，兼容性最好）
+    #: - "auto"  按平台自动探测（Windows: d3d11va → dxva2 → cuda → qsv），默认
+    #: - "none"  CPU 软解（兼容性最好）
     #: - 指定后端名：cuda（N 卡）/ d3d11va、dxva2（AMD 等 Windows 显卡）/
     #:   qsv（Intel 核显）/ vaapi（Linux）/ videotoolbox（macOS）
     #: 所选后端不可用时自动降级软解，不会导致检测失败。
-    hwaccel: str = "none"
+    hwaccel: str = "auto"
 
     #: ffmpeg 可执行文件路径
     ffmpeg_path: str = "ffmpeg"

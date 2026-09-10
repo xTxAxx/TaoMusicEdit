@@ -29,6 +29,7 @@ DEFAULT_DETECTOR = {
     "coarse_step": "5",
     "fine_step": "1",
     "extractor": "ffmpeg",
+    "hwaccel": "auto",
 }
 
 #: trimmer 参数默认值（与前端 static/js/params.js 的 default 保持一致）。

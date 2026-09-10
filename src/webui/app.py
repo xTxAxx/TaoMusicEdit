@@ -1418,14 +1418,19 @@ def job_events(jid):
             if item["type"] in ("done", "error", "cancelled"):
                 return
         while True:
-            if job.status != "running" and job.cancel_event.is_set():
-                break
+            # 任务仍在运行时以 15s 为周期发 keepalive；任务已结束则只做 1s 的
+            # 短等待——终态事件若还在队列里，毫秒级即可取到，不会被漏掉。
             try:
-                item = job._queue.get(timeout=15)
+                item = job._queue.get(timeout=15 if job.status == "running" else 1)
                 yield sse_payload(item)
                 if item["type"] in ("done", "error", "cancelled"):
                     return
             except queue.Empty:
+                # 队列已空：若任务也已结束（如断线重连后终态事件已被上一连接消费），
+                # 结束事件流并交由前端 pollSettled 兜底确认终态，
+                # 避免 keepalive 空转、任务按钮永久卡在"运行中"。
+                if job.status != "running":
+                    break
                 yield ": keepalive\n\n"
 
     return Response(
