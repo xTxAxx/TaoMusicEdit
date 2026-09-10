@@ -359,12 +359,121 @@ body {
 .end-badge.on { display: inline-block; }
 .end-badge.on:hover { background: rgba(231,76,60,0.12); }
 
-/* ---------------- 参数面板 ---------------- */
-.panels {
+/* ---------------- 任务中心（左右两卡片） ---------------- */
+.task-panels {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 14px;
+  align-items: start;
 }
+/* 每张卡片限位：避免子项挤压/溢出 */
+.task-panel { min-width: 0; }
+.task-tools { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.task-chips { display: inline-flex; gap: 4px; }
+.chip {
+  border: 1px solid var(--border); background: var(--bg-soft); color: var(--text-dim);
+  border-radius: 12px; padding: 2px 9px; font-size: 11.5px; cursor: pointer;
+  white-space: nowrap; transition: all .15s;
+}
+.chip:hover { color: var(--text); border-color: var(--accent); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.task-total { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+/* 总进度条轨道（未完成部分）：低对比底色 + 内阴影，与任务列表风格一致 */
+.task-total-bar {
+  flex: 1; height: 8px; min-width: 0;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+/* 已完成部分：渐变强调色，宽度平滑过渡 */
+.task-total-bar .progress-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+/* 全部完成：切换为成功色 */
+.task-total-bar .progress-fill.full {
+  background: linear-gradient(90deg, var(--ok), var(--accent-2));
+}
+.task-total-label {
+  flex-shrink: 0; min-width: 42px; text-align: right;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--text-dim); white-space: nowrap;
+}
+
+.task-list {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 340px; overflow-y: auto; padding-right: 2px;
+}
+.task-item {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; background: var(--bg-soft);
+}
+.task-item.hidden { display: none; }
+.task-item.group-hide { display: none; }
+.task-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; margin-bottom: 5px;
+}
+.task-name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* 状态徽标：颜色 + 文字双重编码，扫读友好 */
+.badge {
+  flex-shrink: 0; font-size: 11px; line-height: 1.6;
+  padding: 0 8px; border-radius: 999px; white-space: nowrap;
+}
+.b-pending   { background: rgba(148,163,184,0.16); color: var(--text-dim); }
+.b-running   { background: rgba(79,140,255,0.18); color: #6ea8ff; }
+.b-success   { background: rgba(46,204,113,0.16); color: var(--ok); }
+.b-fail      { background: rgba(231,76,60,0.16); color: var(--bad); }
+.b-cancelled { background: rgba(230,126,34,0.16); color: #e8a84c; }
+.b-cache     { background: rgba(56,178,172,0.16); color: var(--accent-2); }
+.task-time { flex-shrink: 0; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.task-bar {
+  height: 6px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 3px; overflow: hidden;
+}
+.task-bar .progress-fill { transition: width .2s; }
+.task-item.done .task-bar .progress-fill { background: linear-gradient(90deg, var(--ok), var(--accent-2)); }
+.task-item.fail .task-bar .progress-fill { background: linear-gradient(90deg, var(--bad), var(--bad)); }
+.task-item.cancelled .task-bar .progress-fill { background: linear-gradient(90deg, var(--warn), var(--warn)); }
+.task-detail { margin-top: 4px; font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
+.task-log { margin-top: 4px; font-size: 11px; color: var(--text-dim); line-height: 1.55; }
+.task-log div { margin-top: 1px; }
+.task-log div:first-child { margin-top: 0; }
+.task-log.collapsed { display: none; }
+.task-actions { display: flex; gap: 4px; margin-top: 5px; }
+.task-actions .btn { padding: 1px 7px; font-size: 11px; }
+.task-empty {
+  padding: 16px 8px; text-align: center; font-size: 12px;
+  color: var(--text-dim); border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.task-empty[hidden] { display: none; }
+/* 批量折叠组（完成后一行摘要） */
+.task-group {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px dashed var(--border); border-radius: 8px;
+  padding: 7px 9px; background: var(--bg-soft);
+  cursor: pointer; font-size: 12.5px;
+}
+.task-group:hover { border-color: var(--accent); }
+.task-group .caret {
+  color: var(--text-dim); font-size: 10px;
+  transition: transform .15s;
+}
+.task-group.open .caret { transform: rotate(90deg); }
+.task-group-title {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: var(--text);
+}
+.task-group-summary { flex-shrink: 0; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
 /* 侧边栏内的参数面板改为纵向堆叠（窄列下更清晰） */
 .sidebar .params { grid-template-columns: 1fr; gap: 8px; }
 .sidebar .param-row { grid-template-columns: 1fr; row-gap: 3px; padding: 6px 8px; }
@@ -506,7 +615,7 @@ input[type="number"] {
 
 /* ---------------- 响应式 ---------------- */
 @media (max-width: 1100px) {
-  .panels { grid-template-columns: 1fr; }
+  .task-panels { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
   body { overflow: auto; }

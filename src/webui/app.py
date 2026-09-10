@@ -52,7 +52,7 @@ from trimmer.core.ffmpeg import find_ffmpeg  # noqa: E402
 from trimmer.core.probe import probe as trimmer_probe  # noqa: E402
 from trimmer.utils.validation import validate_frame, validate_timestamp  # noqa: E402
 
-from webui.jobs import JobCancelled, manager, sse_payload  # noqa: E402
+from webui.jobs import FileCancelled, JobCancelled, manager, sse_payload  # noqa: E402
 
 from webui import settings as settings_mod  # noqa: E402  (设置持久化)
 
@@ -932,6 +932,9 @@ def run_batch_detect(job, payload: dict) -> dict:
         """处理单个文件，返回 (index, result)；异常在内部收敛为错误结果。"""
         if job.cancel_event.is_set():
             raise JobCancelled()
+        # 单文件取消：该索引已在取消集合中（含排队未开始的文件）直接返回取消结果
+        if (i + 1) in job.file_cancel:
+            return i, {"file": path, "detected": False, "error": "已取消", "cancelled": True}
         job.publish("progress", {
             "index": i + 1, "total": total, "file": path,
             "percent": round(i / total * 100, 1),
@@ -950,6 +953,8 @@ def run_batch_detect(job, payload: dict) -> dict:
         def cb(stage, progress, message):
             if job.cancel_event.is_set():
                 raise JobCancelled()
+            if (i + 1) in job.file_cancel:
+                raise FileCancelled()
             job.publish("progress", {
                 "index": i + 1, "total": total, "file": path,
                 "percent": round((i + progress) / total * 100, 1),
@@ -961,6 +966,8 @@ def run_batch_detect(job, payload: dict) -> dict:
             r["file"] = path
             store_detect_result(r, path)  # 每个文件完成即写缓存，中断不丢已完成部分
             return i, r
+        except FileCancelled:
+            return i, {"file": path, "detected": False, "error": "已取消", "cancelled": True}
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
             return i, {"file": path, "detected": False, "error": str(exc)}
 
@@ -988,7 +995,8 @@ def run_batch_detect(job, payload: dict) -> dict:
         "summary": {
             "total": total,
             "detected": sum(1 for r in results if r and r.get("detected")),
-            "failed": sum(1 for r in results if r and r.get("error")),
+            "failed": sum(1 for r in results if r and r.get("error") and not r.get("cancelled")),
+            "cancelled": sum(1 for r in results if r and r.get("cancelled")),
             "skipped": skipped,
         },
     }
@@ -1288,6 +1296,9 @@ def run_batch_trim(job, payload: dict) -> dict:
         if job.cancel_event.is_set():
             raise JobCancelled()
         path = item.get("path") or ""
+        # 单文件取消：直接返回取消结果（含排队未开始的文件）
+        if (i + 1) in job.file_cancel:
+            return i, {"file": path, "ok": False, "error": "已取消", "cancelled": True}
         job.publish("progress", {
             "index": i + 1, "total": total, "file": path,
             "percent": round(i / total * 100, 1),
@@ -1307,6 +1318,8 @@ def run_batch_trim(job, payload: dict) -> dict:
         def cb(pct, sec):
             if job.cancel_event.is_set():
                 raise KeyboardInterrupt()
+            if (i + 1) in job.file_cancel:
+                raise FileCancelled()
             job.publish("progress", {
                 "index": i + 1, "total": total, "file": path,
                 "percent": round((i + pct / 100) / total * 100, 1),
@@ -1326,6 +1339,8 @@ def run_batch_trim(job, payload: dict) -> dict:
                 "output_files": result.output_files,
                 "message": result.message,
             }
+        except FileCancelled:
+            return i, {"file": path, "ok": False, "error": "已取消", "cancelled": True}
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不中断整体
             return i, {"file": path, "ok": False, "error": str(exc)}
 
@@ -1352,7 +1367,8 @@ def run_batch_trim(job, payload: dict) -> dict:
         "summary": {
             "total": total,
             "ok": sum(1 for r in results if r and r.get("ok")),
-            "failed": sum(1 for r in results if r and r.get("error")),
+            "failed": sum(1 for r in results if r and r.get("error") and not r.get("cancelled")),
+            "cancelled": sum(1 for r in results if r and r.get("cancelled")),
         },
     }
 
@@ -1421,6 +1437,20 @@ def job_cancel(jid):
     ok = manager.cancel(jid)
     if not ok:
         return jsonify({"ok": False, "message": "任务不存在"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/jobs/<jid>/cancel-file", methods=["POST"])
+def job_cancel_file(jid):
+    """取消批量任务中的单个文件（1 基 index），不影响同批其他文件。"""
+    job = manager.get(jid)
+    if job is None:
+        return jsonify({"ok": False, "message": "任务不存在"}), 404
+    data = request.get_json(force=True, silent=True) or {}
+    index = data.get("index")
+    if not isinstance(index, int) or index < 1:
+        return jsonify({"ok": False, "message": "index 必须为正整数"}), 400
+    job.file_cancel.add(index)
     return jsonify({"ok": True})
 
 

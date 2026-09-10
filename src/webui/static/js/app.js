@@ -11,7 +11,12 @@ const state = {
   sel: new Set(),          // 批处理选择的视频路径集合
   selAnchor: null,         // shift 区选的锚点路径
   batchDetectResults: {},  // 批量 Detect 结果缓存 { path: result }
-  batchRows: new Map(),    // 批量任务行 { index(1基): {row,fill,st,log} }
+  batchRuns: new Set(),    // 本会话实际执行过检测的文件路径（区分「缓存匹配」与「真实运行」）
+  tasks: { detect: [], trim: [] },  // 任务中心：颜色检测 / 视频裁剪 两列的任务
+  jobTasks: new Map(),     // job_id -> { kind, col, batch, tasks: [], jobId }：SSE 结果定位到任务
+  groups: new Map(),       // job_id -> 批量折叠组 { parent, tasks, expanded }
+  filters: { detect: "all", trim: "all" },  // 各列筛选：all / running / done / fail
+  _taskSeq: 0,
 };
 
 // ---------------- 工具 ----------------
@@ -230,11 +235,14 @@ async function selectVideo(vpath, rowEl) {
 // 填入 trimmer 裁剪起点 + 在播放器加载检测标记并在 panelDetect 中展示。
 async function applyBatchResultForVideo(vpath) {
   let r = state.batchDetectResults[vpath] || null;
-  let cached = false;
+  let cached = true;
   if (!r) {
     r = await fetchCachedDetect(vpath);
     if (r === null || state.currentVideo !== vpath) return;  // 无缓存或已切换视频
-    cached = true;
+  } else {
+    // 结果已在会话内（可能来自启动时恢复的持久化缓存）：
+    // 仅当本会话真正执行过该文件的检测时，才视为「批量检测结果」，否则视为「缓存」
+    cached = !state.batchRuns.has(vpath);
   }
   state.batchDetectResults[vpath] = r;
   renderDetectResult(r, cached ? "缓存" : null);
@@ -518,8 +526,9 @@ async function runDetect() {
     v.errors.forEach((m) => toast("error", m));
     return;
   }
-  setBusy("detect", true);
   setStatus("检测中…");
+  const task = addTask("detect", state.currentVideo,
+    { path: state.currentVideo, params: v.params });
   try {
     const res = await fetch("/api/detect", {
       method: "POST",
@@ -527,12 +536,14 @@ async function runDetect() {
       body: JSON.stringify({ path: state.currentVideo, params: v.params }),
     });
     const data = await res.json();
-    if (!data.ok) { toast("error", data.message || "启动检测失败"); setBusy("detect", false); return; }
-    state.jobs.detect = data.job_id;
-    openSSE(data.job_id, "detect");
+    if (!data.ok) { finalizeTask(task, "fail", ["启动检测失败：" + (data.message || "")]); return; }
+    task.jobId = data.job_id;
+    state.jobs.detect = task.jobId;
+    state.jobTasks.set(task.jobId, { kind: "detect", col: "detect", batch: false, tasks: [task] });
+    setTaskRunning(task, "启动中…");
+    openSSE(task.jobId, "detect");
   } catch (e) {
-    toast("error", "网络错误：" + e.message);
-    setBusy("detect", false);
+    finalizeTask(task, "fail", ["网络错误：" + e.message]);
   }
 }
 
@@ -546,8 +557,9 @@ async function runTrim() {
     v.errors.forEach((m) => toast("error", m));
     return;
   }
-  setBusy("trim", true);
   setStatus("裁剪中…");
+  const task = addTask("trim", state.currentVideo,
+    { path: state.currentVideo, output_dir: state.outputDir, params: v.params });
   try {
     const res = await fetch("/api/trim", {
       method: "POST",
@@ -560,180 +572,442 @@ async function runTrim() {
     });
     const data = await res.json();
     if (!data.ok) {
-      toast("error", data.message || "启动裁剪失败");
       // 终点参数校验失败（后端返回 400）时，在终点行内同步提示
       if (data.message && data.message.indexOf("终点") !== -1) {
         const endRow = rowOf("end_value");
         if (endRow) showRowError(endRow, data.message);
       }
-      setBusy("trim", false);
+      finalizeTask(task, "fail", ["启动裁剪失败：" + (data.message || "")]);
       return;
     }
-    state.jobs.trim = data.job_id;
-    openSSE(data.job_id, "trim");
+    task.jobId = data.job_id;
+    state.jobs.trim = task.jobId;
+    state.jobTasks.set(task.jobId, { kind: "trim", col: "trim", batch: false, tasks: [task] });
+    setTaskRunning(task, "启动中…");
+    openSSE(task.jobId, "trim");
   } catch (e) {
-    toast("error", "网络错误：" + e.message);
-    setBusy("trim", false);
+    finalizeTask(task, "fail", ["网络错误：" + e.message]);
   }
 }
 
-// ---------------- 批处理流程 ----------------
-// 批处理统一使用一个「批处理」卡片，不再区分批量检测 / 批量裁剪
-function openBatchPanel(title, count, files) {
-  const t = document.getElementById("batchTitle");
-  if (t) t.textContent = title + " · " + count + " 个文件";
-  const box = document.getElementById("batchResult");
-  if (box) box.innerHTML = "";
-  const wrap = document.getElementById("batchProgress");
-  if (wrap) wrap.hidden = true;
-  const fill = document.getElementById("batchProgressFill");
-  if (fill) fill.style.width = "0%";
-  const label = document.getElementById("batchProgressLabel");
-  if (label) label.textContent = "";
-  initBatchRows(files || []);
+// ---------------- 任务中心：任务引擎 ----------------
+// 任务中心把「单视频检测/裁剪」与「批量检测/裁剪」统一为任务条目，按列展示。
+// 任务结构：{ key, col, path, name, status, progress, log, payload, jobId, index, result, error, _el }
+const TASK_STATUS = { pending: "等待中", running: "运行中", success: "成功", fail: "失败", cancelled: "已取消" };
+
+function tasksOf(col) { return state.tasks[col]; }
+
+function taskListEl(col) {
+  return document.getElementById(col === "detect" ? "detectTaskList" : "trimTaskList");
 }
 
-function setBatchBusy(busy) {
-  const wrap = document.getElementById("batchProgress");
-  const cancel = document.getElementById("batchCancel");
-  if (wrap) wrap.hidden = !busy;
-  if (cancel) cancel.disabled = !busy;
-  if (busy) {
-    const fill = document.getElementById("batchProgressFill");
-    const label = document.getElementById("batchProgressLabel");
-    if (fill) fill.style.width = "0%";
-    if (label) label.textContent = "启动中…";
-  }
-  updateActions();
+function taskEls(t) { return t._el || (t._el = {}); }
+
+function mkTaskBtn(label, title) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "btn small"; b.textContent = label;
+  b.title = title; b.disabled = true;
+  return b;
 }
 
-// ---------------- 批处理任务行（每文件：进度条 + 多行日志） ----------------
-// files 为 detect 的 string[] 或 trim 的 {path, skip?, reason?}[]，按入参顺序建行。
-function initBatchRows(files) {
-  resetBatchList();
-  const list = document.getElementById("batchList");
-  if (!list) return;
-  files.forEach((f, i) => {
-    const path = typeof f === "string" ? f : (f && f.path) || "";
-    const skip = !!(f && f.skip);
-    const reason = (f && f.reason) || "";
-    const idx = i + 1;
+function buildTaskRow(t) {
+  const list = taskListEl(t.col);
+  const row = document.createElement("div");
+  row.className = "task-item";
 
-    const row = document.createElement("div");
-    row.className = "batch-row" + (skip ? " skip" : "");
-    row.dataset.idx = String(idx);
+  const head = document.createElement("div");
+  head.className = "task-head";
+  const name = document.createElement("div");
+  name.className = "task-name"; name.textContent = t.name; name.title = t.path;
+  const badge = document.createElement("span");
+  badge.className = "badge b-pending"; badge.textContent = TASK_STATUS.pending;
+  const time = document.createElement("span");
+  time.className = "task-time";
+  head.appendChild(name); head.appendChild(badge); head.appendChild(time);
 
-    const head = document.createElement("div");
-    head.className = "batch-row-head";
-    const name = document.createElement("div");
-    name.className = "batch-row-name";
-    name.textContent = basename(path) || "(未知)";
-    name.title = path;
-    const st = document.createElement("div");
-    st.className = "batch-row-state";
-    st.textContent = skip ? "已跳过" : "等待中";
-    head.appendChild(name);
-    head.appendChild(st);
+  const bar = document.createElement("div");
+  bar.className = "task-bar";
+  const fill = document.createElement("div");
+  fill.className = "progress-fill"; fill.style.width = "0%";
+  bar.appendChild(fill);
 
-    const bar = document.createElement("div");
-    bar.className = "batch-row-bar";
-    const fill = document.createElement("div");
-    fill.className = "progress-fill";
-    bar.appendChild(fill);
+  const detail = document.createElement("div");
+  detail.className = "task-detail";
 
-    const log = document.createElement("div");
-    log.className = "batch-log";
-    if (skip) {
-      const d = document.createElement("div");
-      d.textContent = reason || "已跳过";
-      log.appendChild(d);
+  const log = document.createElement("div");
+  log.className = "task-log collapsed";
+
+  const actions = document.createElement("div");
+  actions.className = "task-actions";
+  const bLog = mkTaskBtn("日志", "展开 / 收起完整日志");
+  const bInterrupt = mkTaskBtn("中断", "中断该任务");
+  const bRetry = mkTaskBtn("重试", "重新执行该任务");
+  const bDel = mkTaskBtn("删除", "从列表移除该任务");
+  actions.appendChild(bLog);
+  actions.appendChild(bInterrupt);
+  actions.appendChild(bRetry);
+  actions.appendChild(bDel);
+
+  row.appendChild(head);
+  row.appendChild(bar);
+  row.appendChild(detail);
+  row.appendChild(log);
+  row.appendChild(actions);
+  list.appendChild(row);
+
+  const els = { row, fill, badge, time, detail, log, bLog,
+                interrupt: bInterrupt, retry: bRetry, del: bDel };
+  bLog.addEventListener("click", () => toggleTaskLog(t));
+  bInterrupt.addEventListener("click", () => interruptTask(t));
+  bRetry.addEventListener("click", () => retryTask(t));
+  bDel.addEventListener("click", () => removeTask(t));
+  return els;
+}
+
+function toggleTaskLog(t) {
+  const els = taskEls(t);
+  els.log.classList.toggle("collapsed");
+  els.bLog.textContent = els.log.classList.contains("collapsed") ? "日志" : "收起日志";
+}
+
+function addTask(col, path, payload, init) {
+  const t = Object.assign({
+    key: "t" + (++state._taskSeq),
+    col, path, name: basename(path) || "(未知)",
+    status: "pending", progress: 0, log: [],
+    payload: payload || null, jobId: null, index: null,
+    result: null, error: null, finishedAt: null,
+    groupKey: null, lastStage: null,
+  }, init || {});
+  tasksOf(col).push(t);
+  t._el = buildTaskRow(t);
+  refreshTaskVisibility(t);
+  updateColumnTotal(col);
+  return t;
+}
+
+function removeTask(t) {
+  const arr = tasksOf(t.col);
+  const i = arr.indexOf(t);
+  if (i >= 0) arr.splice(i, 1);
+  const els = taskEls(t);
+  if (els && els.row && els.row.parentNode) els.row.parentNode.removeChild(els.row);
+  // 折叠组内任务删空后移除组头
+  if (t.groupKey) {
+    const g = state.groups.get(t.groupKey);
+    if (g && g.tasks.every((tt) => !tasksOf(t.col).includes(tt))) {
+      if (g.parent && g.parent.parentNode) g.parent.parentNode.removeChild(g.parent);
+      state.groups.delete(t.groupKey);
     }
+  }
+  updateColumnTotal(t.col);
+  refreshGroupVisibility(t.col);
+}
 
-    row.appendChild(head);
-    row.appendChild(bar);
-    row.appendChild(log);
-    list.appendChild(row);
-    state.batchRows.set(idx, { row, fill, st, log });
+function clearFinishedTasks(col) {
+  tasksOf(col).slice().forEach((t) => {
+    if (t.status === "success" || t.status === "fail" || t.status === "cancelled") removeTask(t);
   });
 }
 
-function resetBatchList() {
-  state.batchRows.clear();
-  const list = document.getElementById("batchList");
-  if (list) list.innerHTML = "";
+function updateColumnTotal(col) {
+  const arr = tasksOf(col);
+  const fill = document.getElementById(col === "detect" ? "detectTotalFill" : "trimTotalFill");
+  const label = document.getElementById(col === "detect" ? "detectTotalLabel" : "trimTotalLabel");
+  const empty = document.getElementById(col === "detect" ? "detectTaskEmpty" : "trimTaskEmpty");
+  if (empty) empty.hidden = arr.length > 0;
+  if (!arr.length) {
+    if (fill) { fill.style.width = "0%"; fill.classList.remove("full"); }
+    if (label) label.textContent = "";
+    return;
+  }
+  let sum = 0, done = 0;
+  arr.forEach((t) => {
+    const finished = t.status === "success" || t.status === "fail" || t.status === "cancelled";
+    sum += finished ? 100 : t.progress;
+    if (finished) done++;
+  });
+  if (fill) {
+    fill.style.width = (sum / arr.length).toFixed(1) + "%";
+    fill.classList.toggle("full", done === arr.length);
+  }
+  if (label) label.textContent = done + "/" + arr.length;
 }
 
-// 根据 SSE 进度事件更新对应任务行（键 = index，天然幂等，容忍事件交错/重连重放）
-function batchRowUpdate(p) {
-  const item = state.batchRows.get(Number(p.index));
-  if (!item) return;
-  let f;
-  if (p.progress != null) f = p.progress * 100;        // detect 单文件进度 0-1
-  else if (p.percent_file != null) f = p.percent_file; // trim 单文件进度 0-100
-  else f = p.percent != null ? p.percent : 0;          // 兜底整体进度
-  item.fill.style.width = Math.max(0, Math.min(100, f)) + "%";
-  const stageName = {
-    coarse: "粗扫", fine: "细化", precise: "逐帧", fallback: "兜底细扫",
-    locate: "定位", done: "完成",
-  }[p.stage] || "";
-  const txt = (stageName && p.message && p.message !== stageName)
-    ? stageName + "：" + p.message
-    : (stageName || p.message || "");
-  item.st.textContent = txt;
-  if (txt) batchRowLog(Number(p.index), txt);
+// ---------------- 筛选 ----------------
+function switchFilter(col, f) {
+  state.filters[col] = f;
+  const tools = document.querySelector(`.task-tools[data-col="${col}"]`);
+  if (tools) tools.querySelectorAll(".chip").forEach((c) => {
+    c.classList.toggle("active", c.dataset.filter === f);
+  });
+  tasksOf(col).forEach(refreshTaskVisibility);
+  refreshGroupVisibility(col);
 }
 
-// 行内追加一条日志，最多保留 8 条（超出移除最旧）
-function batchRowLog(idx, txt) {
-  const item = state.batchRows.get(idx);
-  if (!item) return;
+function refreshTaskVisibility(t) {
+  const f = state.filters[t.col] || "all";
+  const keep = (
+    f === "all" ? true :
+    f === "running" ? (t.status === "running" || t.status === "pending") :
+    f === "done" ? t.status === "success" :
+    (t.status === "fail" || t.status === "cancelled")
+  );
+  taskEls(t).row.classList.toggle("hidden", !keep);
+}
+
+// ---------------- 批量折叠组 ----------------
+// 批量任务结束后折叠为一行摘要（可展开查看逐文件明细）。
+function collapseBatch(ctx) {
+  if (!ctx.batch || !ctx.tasks || ctx.tasks.length <= 1) return;
+  if (state.groups.has(ctx.jobId)) return;
+  const tasks = ctx.tasks;
+  const firstEl = taskEls(tasks[0]).row;
+  const parent = document.createElement("div");
+  parent.className = "task-group";
+  const caret = document.createElement("span");
+  caret.className = "caret"; caret.textContent = "▶";
+  const title = document.createElement("span");
+  title.className = "task-group-title";
+  const summary = document.createElement("span");
+  summary.className = "task-group-summary";
+  parent.appendChild(caret);
+  parent.appendChild(title);
+  parent.appendChild(summary);
+  firstEl.parentNode.insertBefore(parent, firstEl);
+
+  const ok = tasks.filter((t) => t.status === "success").length;
+  const fail = tasks.filter((t) => t.status === "fail").length;
+  const canc = tasks.filter((t) => t.status === "cancelled").length;
+  const label = ctx.kind === "batch_detect" ? "批量检测" : "批量裁剪";
+  title.textContent = label + " · " + tasks.length + " 个文件";
+  let sum = ok + "/" + tasks.length;
+  if (fail) sum += " · 失败 " + fail;
+  if (canc) sum += " · 取消 " + canc;
+  summary.textContent = sum;
+
+  const g = { parent, tasks, expanded: false };
+  state.groups.set(ctx.jobId, g);
+  tasks.forEach((t) => { taskEls(t).row.classList.add("group-hide"); });
+  parent.addEventListener("click", () => toggleBatchGroup(g));
+  refreshGroupVisibility(ctx.col);
+}
+
+function toggleBatchGroup(g) {
+  g.expanded = !g.expanded;
+  g.parent.classList.toggle("open", g.expanded);
+  g.tasks.forEach((t) => taskEls(t).row.classList.toggle("group-hide", !g.expanded));
+}
+
+function refreshGroupVisibility(col) {
+  const f = state.filters[col] || "all";
+  state.groups.forEach((g) => {
+    if (!g.tasks.length || g.tasks[0].col !== col) return;
+    const parent = g.parent;
+    if (!parent || !parent.parentNode) return;
+    if (f === "all") { parent.classList.remove("hidden"); return; }
+    const visible = g.tasks.some((t) => (
+      f === "running" ? (t.status === "running" || t.status === "pending") :
+      f === "done" ? t.status === "success" :
+      (t.status === "fail" || t.status === "cancelled")
+    ));
+    parent.classList.toggle("hidden", !visible);
+  });
+}
+
+// ---------------- 任务状态更新 ----------------
+const BADGE_MAP = {
+  pending: ["b-pending", "等待中"],
+  running: ["b-running", "运行中"],
+  success: ["b-success", "成功"],
+  fail: ["b-fail", "失败"],
+  cancelled: ["b-cancelled", "已取消"],
+};
+
+function setBadge(el, status) {
+  const item = BADGE_MAP[status] || BADGE_MAP.pending;
+  el.className = "badge " + item[0];
+  el.textContent = item[1];
+}
+
+function fmtTime(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function taskLog(t, txt) {
+  if (txt == null || txt === "") return;
+  const els = taskEls(t);
   const d = document.createElement("div");
   d.textContent = txt;
-  item.log.appendChild(d);
-  while (item.log.children.length > 8) item.log.removeChild(item.log.firstChild);
+  els.log.appendChild(d);
+  while (els.log.children.length > 30) els.log.removeChild(els.log.firstChild);
+  els.bLog.disabled = false;
 }
 
-// 批量结束后按入参顺序把每行切换为最终结果（detect: detected/frame/timestamp；trim: ok/output_files）
-function batchRowFinalize(results) {
-  (results || []).forEach((r, i) => {
-    const item = state.batchRows.get(i + 1);
-    if (!item) return;
-    const name = item.row.querySelector(".batch-row-name");
-    if (name && r.file) { name.textContent = basename(r.file); name.title = r.file; }
-    let txt = "";
-    let cls = "done";
-    if (r.error) {
-      txt = "✗ " + r.error;
-      cls = "fail";
-      if (!item.log.children.length) batchRowLog(i + 1, r.error);
-    } else if (r.detected) {
-      const t = (r.timestamp != null) ? r.timestamp.toFixed(3) + "s" : "?";
-      txt = "✓ 帧#" + (r.frame + 1) + " @ " + t;
-      if (r.skipped) batchRowLog(i + 1, "已使用缓存结果");
-    } else if (r.ok) {
-      txt = "✓ 裁剪完成";
-      (r.output_files || []).forEach((of) => batchRowLog(i + 1, "↳ " + basename(of)));
-    } else {
-      txt = "未命中";
+function setTaskRunning(t, label) {
+  t.status = "running";
+  const els = taskEls(t);
+  els.row.classList.remove("pending", "done", "fail", "cancelled");
+  els.row.classList.add("running");
+  setBadge(els.badge, "running");
+  if (label) els.detail.textContent = label;
+  updateTaskActions(t);
+  updateColumnTotal(t.col);
+}
+
+function setTaskProgress(t, pct, summary) {
+  if (t.status !== "success" && t.status !== "fail" && t.status !== "cancelled") t.status = "running";
+  t.progress = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  taskEls(t).fill.style.width = t.progress + "%";
+  if (summary) taskEls(t).detail.textContent = summary;
+  updateTaskActions(t);
+  updateColumnTotal(t.col);
+}
+
+function finalizeTask(t, status, lines, result, error) {
+  t.status = status;
+  t.progress = 100;
+  t.finishedAt = Date.now();
+  t.result = result || null;
+  t.error = error || null;
+  const els = taskEls(t);
+  els.row.classList.remove("pending", "running", "done", "fail", "cancelled");
+  els.row.classList.add(status === "success" ? "done" : status);
+  els.fill.style.width = "100%";
+  setBadge(els.badge, status);
+  els.time.textContent = fmtTime(t.finishedAt);
+  els.detail.textContent = (lines && lines.length) ? lines[0] : TASK_STATUS[status];
+  (lines || []).forEach((l) => taskLog(t, l));
+  updateTaskActions(t);
+  updateColumnTotal(t.col);
+}
+
+function updateTaskActions(t) {
+  const els = taskEls(t);
+  const running = (t.status === "running" || t.status === "pending") && !!t.jobId;
+  const done = t.status === "success" || t.status === "fail" || t.status === "cancelled";
+  els.interrupt.disabled = !running;
+  els.retry.disabled = !(done && !!t.payload);
+  els.del.disabled = false;
+}
+
+// 单个任务结果终态 -> { status, lines }
+function finalizeItemResult(r, col) {
+  if (!r) return { status: "fail", lines: ["任务异常结束"] };
+  if (r.cancelled) return { status: "cancelled", lines: ["任务已取消"] };
+  if (r.error) return { status: "fail", lines: ["✗ " + r.error] };
+  if (col === "detect") {
+    const lines = (r.skipped ? ["已使用缓存结果"] : []);
+    if (!r.detected) {
+      lines.push("未检测到目标颜色" + (r.message ? "：" + r.message : ""));
+      return { status: "fail", lines };
     }
-    item.st.textContent = txt;
-    item.fill.style.width = "100%";
-    item.row.classList.add(cls);
-  });
+    const ts = (r.timestamp != null) ? r.timestamp.toFixed(3) + "s" : "?";
+    const conf = (r.confidence != null) ? "（置信度 " + r.confidence.toFixed(4) + "）" : "";
+    lines.push("检测到目标颜色：帧#" + (r.frame + 1) + " @ " + ts + conf);
+    return { status: "success", lines };
+  }
+  if (r.ok === false) return { status: "fail", lines: ["✗ " + (r.error || "裁剪失败")] };
+  const out = (r.output_files || []).map((f) => "↳ " + basename(f));
+  const range = "起点：" + (r.frame ? "#" + r.frame + " 帧" : (r.timestamp || 0).toFixed(3) + "s");
+  return { status: "success", lines: ["裁剪完成：" + range].concat(out) };
 }
 
+// ---------------- 中断 / 重试 ----------------
+function interruptTask(t) {
+  if (!t.jobId) return;
+  const ctx = state.jobTasks.get(t.jobId);
+  const colName = t.col === "detect" ? "检测" : "裁剪";
+  if (ctx && ctx.batch && t.index) {
+    // 批量任务：单文件取消，不影响同批其他文件
+    fetch("/api/jobs/" + t.jobId + "/cancel-file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: t.index }),
+    }).catch(() => {});
+    finalizeTask(t, "cancelled", ["已请求中断该文件任务"]);
+    setStatus("已请求中断「" + t.name + "」");
+  } else {
+    fetch("/api/jobs/" + t.jobId + "/cancel", { method: "POST" }).catch(() => {});
+    setStatus(colName + "任务已请求中断");
+  }
+  updateTaskActions(t);
+}
+
+function retryTask(t) {
+  if (!t.payload) return;
+  if (t.col === "detect") retryDetectTask(t);
+  else retryTrimTask(t);
+}
+
+function startRetry(t) {
+  t.status = "pending"; t.progress = 0; t.result = null; t.error = null; t.log = [];
+  t.finishedAt = null; t.lastStage = null;
+  const els = taskEls(t);
+  els.row.classList.remove("done", "fail", "cancelled", "running");
+  els.row.classList.add("pending");
+  els.fill.style.width = "0%";
+  setBadge(els.badge, "pending");
+  els.time.textContent = "";
+  els.detail.textContent = "";
+  els.log.innerHTML = "";
+  els.log.classList.add("collapsed");
+  els.bLog.disabled = true;
+  els.bLog.textContent = "日志";
+  updateTaskActions(t);
+  updateColumnTotal(t.col);
+}
+
+async function retryDetectTask(t) {
+  if (state.jobs.detect) { setStatus("检测任务正在运行中，请稍候"); return; }
+  startRetry(t);
+  try {
+    const res = await fetch("/api/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: t.path, params: t.payload.params }),
+    });
+    const data = await res.json();
+    if (!data.ok) { finalizeTask(t, "fail", ["启动检测失败：" + (data.message || "")]); return; }
+    t.jobId = data.job_id;
+    state.jobs.detect = t.jobId;
+    state.jobTasks.set(t.jobId, { kind: "detect", col: "detect", batch: false, tasks: [t] });
+    setTaskRunning(t, "启动中…");
+    openSSE(t.jobId, "detect");
+  } catch (e) { finalizeTask(t, "fail", ["网络错误：" + e.message]); }
+}
+
+async function retryTrimTask(t) {
+  if (state.jobs.trim) { setStatus("裁剪任务正在运行中，请稍候"); return; }
+  startRetry(t);
+  const params = Object.assign({}, t.payload.params);
+  if (t.payload.frame) { params.start_mode = "frame"; params.start_value = t.payload.frame; }
+  try {
+    const res = await fetch("/api/trim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: t.path, output_dir: t.payload.output_dir, params }),
+    });
+    const data = await res.json();
+    if (!data.ok) { finalizeTask(t, "fail", ["启动裁剪失败：" + (data.message || "")]); return; }
+    t.jobId = data.job_id;
+    state.jobs.trim = t.jobId;
+    state.jobTasks.set(t.jobId, { kind: "trim", col: "trim", batch: false, tasks: [t] });
+    setTaskRunning(t, "启动中…");
+    openSSE(t.jobId, "trim");
+  } catch (e) { finalizeTask(t, "fail", ["网络错误：" + e.message]); }
+}
+
+// ---------------- 批量流程 ----------------
 async function runBatchDetect() {
   const files = [...state.sel];
   if (!files.length) { toast("warn", "请先在工作区选择视频文件（Ctrl 单选 / Shift 区选 / 全选）"); return; }
   if (state.jobs.batch) { toast("warn", "批处理任务正在运行中，请稍候"); return; }
   const v = validateDetect(state);
-  if (v.errors.length) {
-    v.errors.forEach((m) => toast("error", m));
-    return;
-  }
-  openBatchPanel("批量检测", files.length, files);
-  setBatchBusy(true);
+  if (v.errors.length) { v.errors.forEach((m) => toast("error", m)); return; }
   setStatus("批量检测中…");
+  const tasks = files.map((f, i) => addTask("detect", f, { path: f, params: v.params, index: i + 1 }));
   try {
     const res = await fetch("/api/batch/detect", {
       method: "POST",
@@ -745,12 +1019,13 @@ async function runBatchDetect() {
       }),
     });
     const data = await res.json();
-    if (!data.ok) { toast("error", data.message || "启动批量检测失败"); setBatchBusy(false); return; }
+    if (!data.ok) { tasks.forEach((t) => finalizeTask(t, "fail", ["启动批量检测失败：" + (data.message || "")])); return; }
     state.jobs.batch = data.job_id;
+    tasks.forEach((t) => { t.jobId = data.job_id; t.groupKey = data.job_id; updateTaskActions(t); });
+    state.jobTasks.set(data.job_id, { kind: "batch_detect", col: "detect", batch: true, tasks, jobId: data.job_id });
     openSSE(data.job_id, "batch_detect");
   } catch (e) {
-    toast("error", "网络错误：" + e.message);
-    setBatchBusy(false);
+    tasks.forEach((t) => finalizeTask(t, "fail", ["网络错误：" + e.message]));
   }
 }
 
@@ -761,248 +1036,226 @@ async function runBatchTrim() {
   if (!state.outputDir) { toast("warn", "请先设置输出目录"); return; }
   // 批量裁剪不使用终点（以检测结果为起点、保留到片尾），跳过终点校验
   const v = validateTrim(state, false);
-  if (v.errors.length) {
-    v.errors.forEach((m) => toast("error", m));
-    return;
-  }
+  if (v.errors.length) { v.errors.forEach((m) => toast("error", m)); return; }
   // 批量裁剪始终使用批量检测的输出结果作为每个文件的裁剪起点
   const items = [];
   let usable = 0;
   for (const f of files) {
     const r = state.batchDetectResults[f];
-    if (r && r.detected && r.frame !== null && r.frame !== undefined) {
-      items.push({ path: f, frame: r.frame + 1 });
-      usable++;
-    } else {
-      items.push({ path: f, skip: true, reason: "无检测结果（未命中或未执行批量检测）" });
-    }
+    if (r && r.detected && r.frame !== null && r.frame !== undefined) { items.push({ path: f, frame: r.frame + 1 }); usable++; }
+    else items.push({ path: f, skip: true, reason: "无检测结果（未命中或未执行批量检测）" });
   }
   if (!usable) { toast("warn", "没有可用于批量裁剪的检测结果，请先执行批量检测"); return; }
-  openBatchPanel("批量裁剪", items.length, items);
-  setBatchBusy(true);
   setStatus("批量裁剪中…");
+  const tasks = files.map((f, i) => {
+    const r = state.batchDetectResults[f];
+    return addTask("trim", f,
+      { path: f, output_dir: state.outputDir, params: v.params, frame: (r && r.detected) ? r.frame + 1 : null, index: i + 1 });
+  });
   try {
     const res = await fetch("/api/batch/trim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        files: items,
-        output_dir: state.outputDir,
-        params: v.params,
-      }),
+      body: JSON.stringify({ files: items, output_dir: state.outputDir, params: v.params }),
     });
     const data = await res.json();
-    if (!data.ok) { toast("error", data.message || "启动批量裁剪失败"); setBatchBusy(false); return; }
+    if (!data.ok) { tasks.forEach((t) => finalizeTask(t, "fail", ["启动批量裁剪失败：" + (data.message || "")])); return; }
     state.jobs.batch = data.job_id;
+    tasks.forEach((t) => { t.jobId = data.job_id; t.groupKey = data.job_id; updateTaskActions(t); });
+    state.jobTasks.set(data.job_id, { kind: "batch_trim", col: "trim", batch: true, tasks, jobId: data.job_id });
     openSSE(data.job_id, "batch_trim");
   } catch (e) {
-    toast("error", "网络错误：" + e.message);
-    setBatchBusy(false);
+    tasks.forEach((t) => finalizeTask(t, "fail", ["网络错误：" + e.message]));
   }
 }
 
 // ---------------- 任务状态 / SSE ----------------
-function setBusy(kind, busy) {
-  const isDetect = kind === "detect";
-  const btn = document.getElementById(isDetect ? "btnDetect" : "btnTrim");
-  const wrap = document.getElementById(isDetect ? "detectProgress" : "trimProgress");
-  if (btn) btn.disabled = busy;
-  if (wrap) wrap.hidden = !busy;
-  if (busy) {
-    const fill = document.getElementById(isDetect ? "detectProgressFill" : "trimProgressFill");
-    const label = document.getElementById(isDetect ? "detectProgressLabel" : "trimProgressLabel");
-    if (fill) fill.style.width = "0%";
-    if (label) label.textContent = "启动中…";
-  }
-  updateActions();
-}
-
 function openSSE(jobId, kind) {
+  const ctx = state.jobTasks.get(jobId);
+  if (!ctx) return;
+  ctx.jobId = jobId;
+  const jobKey = ctx.batch ? "batch" : kind;
   const es = new EventSource("/api/jobs/" + jobId + "/events");
-  const batch = kind === "batch_detect" || kind === "batch_trim";
-  // 批量任务的 job_id 统一存于 state.jobs.batch（而非 batch_detect / batch_trim）
-  const jobKey = batch ? "batch" : kind;
   let settled = false;
   const stop = () => {
     if (settled) return;
     settled = true;
     es.close();
     state.jobs[jobKey] = null;
+    state.jobTasks.delete(jobId);
     updateActions();
   };
   // 网络层断开兜底：SSE 连接中断可能使终态事件（done/error/cancelled）丢失，
-  // 主动查询一次任务状态，确保任务结束后按钮不会被永久禁用。
+  // 主动查询一次任务状态，确保任务结束后按钮与任务状态不被卡死。
   const pollSettled = () => {
     fetch("/api/jobs/" + jobId)
       .then((r) => r.json())
       .then((d) => {
         if (settled || !d.ok) return;
-        if (d.status === "done") {
-          const res = d.result || {};
-          if (kind === "detect") onDetectDone(res);
-          else if (kind === "trim") onTrimDone(res);
-          else if (kind === "batch_detect") onBatchDetectDone(res);
-          else if (kind === "batch_trim") onBatchTrimDone(res);
-        } else if (d.status === "error") {
-          if (batch) setBatchBusy(false); else setBusy(kind, false);
-          toast("error", d.error || "任务执行失败");
-          setStatus("任务失败");
-        } else if (d.status === "cancelled") {
-          if (batch) setBatchBusy(false); else setBusy(kind, false);
-          toast("info", "任务已取消");
-          setStatus("任务已取消");
-        } else {
-          return; // 仍在运行：交由 SSE 重连继续接收进度与终态
-        }
+        if (d.status === "done") handleJobDone(ctx, d.result || {});
+        else if (d.status === "error") handleJobError(ctx, { message: d.error || "任务执行失败" });
+        else if (d.status === "cancelled") handleJobCancelled(ctx);
+        else return; // 仍在运行：交由 SSE 重连继续接收进度与终态
         stop();
       })
       .catch(() => { /* 查询失败不影响 SSE 主流程 */ });
   };
   es.addEventListener("progress", (ev) => {
-    const p = JSON.parse(ev.data);
-    if (kind === "detect") onDetectProgress(p);
-    else if (kind === "trim") onTrimProgress(p);
-    else if (kind === "batch_detect") onBatchDetectProgress(p);
-    else if (kind === "batch_trim") onBatchTrimProgress(p);
+    let p; try { p = JSON.parse(ev.data); } catch (e) { return; }
+    handleJobProgress(ctx, p);
   });
   es.addEventListener("done", (ev) => {
-    const d = JSON.parse(ev.data);
-    if (kind === "detect") onDetectDone(d);
-    else if (kind === "trim") onTrimDone(d);
-    else if (kind === "batch_detect") onBatchDetectDone(d);
-    else if (kind === "batch_trim") onBatchTrimDone(d);
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    handleJobDone(ctx, d);
     stop();
   });
   es.addEventListener("cancelled", () => {
-    if (batch) {
-      setBatchBusy(false);
-      toast("info", "批量任务已取消");
-    } else {
-      setBusy(kind, false);
-      toast("info", kind === "detect" ? "检测已取消" : "裁剪已取消");
-    }
-    setStatus("任务已取消");
+    handleJobCancelled(ctx);
     stop();
   });
   es.addEventListener("error", (ev) => {
     if (ev.data) {
-      const d = JSON.parse(ev.data);
-      if (batch) setBatchBusy(kind, false); else setBusy(kind, false);
-      toast("error", (d.message || "任务执行失败"));
-      setStatus("任务失败");
+      let d; try { d = JSON.parse(ev.data); } catch (e) { d = {}; }
+      handleJobError(ctx, d);
       stop();
       return;
     }
-    // 网络层错误（无 data）：EventSource 会自动重连；
-    // 若终态事件恰好在连接中断时丢失，用任务状态接口兜底。
     pollSettled();
   });
 }
 
-function onDetectProgress(p) {
-  const fill = document.getElementById("detectProgressFill");
-  const label = document.getElementById("detectProgressLabel");
-  const pct = Math.round((p.progress || 0) * 100);
-  if (fill) fill.style.width = pct + "%";
-  const stageName = {
-    coarse: "粗扫", fine: "细化", precise: "逐帧", fallback: "兜底细扫",
-    locate: "定位", done: "完成",
-  }[p.stage] || p.stage;
-  if (label) label.textContent = "检测中 " + stageName + " " + pct + "% · " + (p.message || "");
+function markJobsRunning(ctx) {
+  ctx.tasks.forEach((t) => { if (t.status === "pending") setTaskRunning(t); });
 }
 
-function onTrimProgress(p) {
-  const fill = document.getElementById("trimProgressFill");
-  const label = document.getElementById("trimProgressLabel");
-  const pct = Math.round(p.percent || 0);
-  if (fill) fill.style.width = pct + "%";
-  if (label) label.textContent = "裁剪中 " + pct + "%（" + (p.seconds || 0).toFixed(1) + "s）";
+function stageLabel(stage) {
+  return { coarse: "粗扫", fine: "细化", precise: "逐帧", fallback: "兜底细扫",
+           locate: "定位", pending: "准备", done: "完成" }[stage] || stage || "";
 }
 
-// ---------------- 批处理进度与结果 ----------------
-function onBatchDetectProgress(p) {
-  const fill = document.getElementById("batchProgressFill");
-  const label = document.getElementById("batchProgressLabel");
-  const pct = Math.round(p.percent || 0);
-  if (fill) fill.style.width = pct + "%";
-  const stageName = {
-    coarse: "粗扫", fine: "细化", precise: "逐帧", fallback: "兜底细扫",
-    locate: "定位", pending: "准备", done: "完成",
-  }[p.stage] || p.stage || "";
-  if (label) label.textContent =
-    "批量检测 " + (p.index || 0) + "/" + (p.total || 0) + " · " +
-    basename(p.file || "") + " · " + stageName + " " + pct + "%";
-  batchRowUpdate(p);
+// ---------------- 任务中心：SSE 事件处理 ----------------
+// 日志减噪：仅记录阶段切换、关键事件（命中/完成/失败/跳过/错误）与整百分比里程碑，
+// 逐帧扫描等高频消息只更新进度与详情行，不再逐条刷入日志。
+function handleJobProgress(ctx, p) {
+  const kind = ctx.kind;
+  if (kind === "detect" || kind === "trim") {
+    const t = ctx.tasks[0];
+    if (!t) return;
+    markJobsRunning(ctx);
+    if (kind === "detect") {
+      const pct = Math.round((p.progress || 0) * 100);
+      const st = stageLabel(p.stage);
+      const txt = (st && p.message && p.message !== st) ? st + "：" + p.message : (st || p.message || "");
+      setTaskProgress(t, pct, txt || ("检测中 " + pct + "%"));
+      const stageChanged = t.lastStage !== (p.stage || "");
+      t.lastStage = p.stage || "";
+      if (stageChanged || /命中|完成|失败|跳过|错误/.test(txt || "") || pct % 25 === 0) {
+        taskLog(t, txt || ("检测中 " + pct + "%"));
+      }
+    } else {
+      const pct = Math.round(p.percent || 0);
+      setTaskProgress(t, pct, "裁剪中 " + pct + "%（" + (p.seconds || 0).toFixed(1) + "s）");
+      if (pct >= 100 || pct === 0 || pct - (t._lastTrimLog || 0) >= 25) {
+        taskLog(t, "裁剪中 " + pct + "%");
+        t._lastTrimLog = pct;
+      }
+    }
+    return;
+  }
+  // 批量：按 index 定位到对应文件任务
+  markJobsRunning(ctx);
+  const t = ctx.tasks[(p.index || 1) - 1];
+  if (!t) { updateColumnTotal(ctx.col); return; }
+  if (kind === "batch_detect") {
+    const pct = (p.progress != null) ? Math.round(p.progress * 100) : Math.round(p.percent || 0);
+    const st = stageLabel(p.stage);
+    const txt = st ? (st + "：" + (p.message || "")) : (p.message || "");
+    setTaskProgress(t, pct, txt || ("检测中 " + pct + "%"));
+    const stageChanged = t.lastStage !== (p.stage || "");
+    t.lastStage = p.stage || "";
+    if (stageChanged || /命中|完成|失败|跳过|错误/.test(txt || "") || pct % 25 === 0) {
+      taskLog(t, txt || ("检测中 " + pct + "%"));
+    }
+  } else {
+    const pctF = (p.percent_file != null) ? Math.round(p.percent_file) : null;
+    const pct = (pctF != null) ? pctF : Math.round(p.percent || 0);
+    setTaskProgress(t, pct, "裁剪中 " + pct + "%");
+    if (pctF != null && (pctF >= 100 || pctF === 0 || pctF - (t._lastTrimLog || 0) >= 25)) {
+      taskLog(t, "裁剪中 " + pctF + "%");
+      t._lastTrimLog = pctF;
+    }
+  }
+  updateColumnTotal(ctx.col);
 }
 
-function onBatchTrimProgress(p) {
-  const fill = document.getElementById("batchProgressFill");
-  const label = document.getElementById("batchProgressLabel");
-  const pct = Math.round(p.percent || 0);
-  if (fill) fill.style.width = pct + "%";
-  if (label) label.textContent =
-    "批量裁剪 " + (p.index || 0) + "/" + (p.total || 0) + " · " +
-    basename(p.file || "") + " " + pct + "%";
-  batchRowUpdate(p);
-}
-
-function onBatchDetectDone(data) {
-  setBatchBusy(false);
+function handleJobDone(ctx, data) {
+  const kind = ctx.kind;
+  if (kind === "detect") {
+    const t = ctx.tasks[0];
+    if (!t) return;
+    const r = finalizeItemResult(data, "detect");
+    finalizeTask(t, r.status, r.lines, data);
+    applyDetectSideEffects(data);
+    return;
+  }
+  if (kind === "trim") {
+    const t = ctx.tasks[0];
+    if (!t) return;
+    const r = finalizeItemResult(data, "trim");
+    finalizeTask(t, r.status, r.lines, data);
+    toast("success", "裁剪完成，共 " + (data.output_files || []).length + " 个输出文件");
+    setStatus("裁剪完成");
+    return;
+  }
+  if (kind === "batch_detect") {
+    const results = data.results || [];
+    const map = {};
+    results.forEach((r) => { if (r && r.file) { map[r.file] = r; state.batchRuns.add(r.file); } });
+    state.batchDetectResults = map;
+    ctx.tasks.forEach((t, i) => {
+      const r = finalizeItemResult(results[i] || {}, "detect");
+      finalizeTask(t, r.status, r.lines, results[i] || null);
+    });
+    const s = data.summary || {};
+    setStatus("批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
+    toast("success", "批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) +
+      (s.skipped ? "，跳过已缓存 " + s.skipped : "") + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
+    collapseBatch(ctx);
+    return;
+  }
+  // batch_trim
   const results = data.results || [];
-  const map = {};
-  results.forEach((r) => { if (r && r.file) map[r.file] = r; });
-  state.batchDetectResults = map;
-  batchRowFinalize(results);
-  renderBatchDetectResults(results, data.summary);
+  ctx.tasks.forEach((t, i) => {
+    const r = finalizeItemResult(results[i] || {}, "trim");
+    finalizeTask(t, r.status, r.lines, results[i] || null);
+  });
   const s = data.summary || {};
-  toast("success", "批量检测完成：命中 " + (s.detected || 0) + " / " + (s.total || 0) +
-    (s.skipped ? "，跳过已缓存 " + s.skipped : "") +
-    (s.failed ? "，失败 " + s.failed : ""));
-  setStatus("批量检测完成");
-  updateActions();
+  setStatus("批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
+  toast("success", "批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) + (s.failed ? "，失败 " + s.failed : "") + (s.cancelled ? "，取消 " + s.cancelled : ""));
+  collapseBatch(ctx);
 }
 
-function onBatchTrimDone(data) {
-  setBatchBusy(false);
-  const results = data.results || [];
-  batchRowFinalize(results);
-  renderBatchTrimResults(results, data.summary);
-  const s = data.summary || {};
-  toast("success", "批量裁剪完成：成功 " + (s.ok || 0) + " / " + (s.total || 0) +
-    (s.failed ? "，失败 " + s.failed : ""));
-  setStatus("批量裁剪完成");
-  updateActions();
+function handleJobError(ctx, data) {
+  ctx.tasks.forEach((t) => finalizeTask(t, "fail", ["✗ " + (data.message || "任务执行失败")], null, data.message));
+  toast("error", data.message || "任务执行失败");
+  setStatus("任务失败");
+  collapseBatch(ctx);
 }
 
-// 批量结果汇总行（逐文件终态已写入各自任务行）
-function renderBatchDetectResults(results, summary) {
-  const box = document.getElementById("batchResult");
-  if (!box) return;
-  const s = summary || {};
-  box.innerHTML =
-    '<div class="result-msg ' + (s.failed ? "warn" : "ok") + '">批量检测完成：命中 ' +
-    (s.detected || 0) + " / " + (s.total || 0) +
-    (s.failed ? "，失败 " + s.failed : "") + "</div>";
-}
-
-function renderBatchTrimResults(results, summary) {
-  const box = document.getElementById("batchResult");
-  if (!box) return;
-  const s = summary || {};
-  box.innerHTML =
-    '<div class="result-msg ' + (s.failed ? "warn" : "ok") + '">批量裁剪完成：成功 ' +
-    (s.ok || 0) + " / " + (s.total || 0) +
-    (s.failed ? "，失败 " + s.failed : "") + "</div>";
+function handleJobCancelled(ctx) {
+  ctx.tasks.forEach((t) => finalizeTask(t, "cancelled", ["任务已取消"]));
+  toast("info", "任务已取消");
+  setStatus("任务已取消");
+  collapseBatch(ctx);
 }
 
 // ---------------- 结果展示 ----------------
-function onDetectDone(data) {
-  setBusy("detect", false);
+// 单视频检测完成后的副作用：关联裁剪起点 + 播放器标记
+function applyDetectSideEffects(data) {
   state.detectResult = data;
-  if (state.currentVideo) state.batchDetectResults[state.currentVideo] = data;  // 供批量裁剪复用
-  renderDetectResult(data);
+  const srcPath = (data && data.path) || state.currentVideo;
+  if (srcPath) { state.batchDetectResults[srcPath] = data; state.batchRuns.add(srcPath); }
   if (data.detected) {
-    // 自动关联 detector 输出到 trimmer 起点参数
     setParam("start_mode", "frame");
     setParam("start_value", data.frame + 1);
     Player.setDetected(data, state.currentVideo);
@@ -1015,71 +1268,33 @@ function onDetectDone(data) {
         (data.timestamp !== null && data.timestamp !== undefined ? data.timestamp.toFixed(3) : "?") + "s（可修改）";
       if (!row.querySelector(".param-tip")) row.appendChild(tip);
     }
+    setStatus("检测完成，已自动关联裁剪起点");
     toast("success",
       "检测成功：目标帧 #" + (data.frame + 1) + " @ " +
       (data.timestamp ? data.timestamp.toFixed(3) : "?") + "s，已自动填入裁剪起点");
-    setStatus("检测完成，已自动关联裁剪起点");
   } else {
     Player.clearDetected();
-    toast("warn", "未检测到目标颜色：" + (data.message || ""));
     setStatus("检测完成（未命中）");
+    toast("warn", "未检测到目标颜色：" + (data.message || ""));
   }
-  updateActions();
 }
 
+// 打开视频时，把已匹配的检测结果（缓存 / 本次批量）登记为一条已完成任务
 function renderDetectResult(data, sourceTag) {
-  const box = document.getElementById("detectResult");
+  const path = (data && data.path) || state.currentVideo || "(未知)";
+  // 同一文件已有成功检测记录时不再追加，避免缓存命中与真实任务重复
+  if (tasksOf("detect").some((t) => t.path === path && t.status === "success")) return null;
+  const r = finalizeItemResult(data, "detect");
   const tag = sourceTag ? "（" + sourceTag + "）" : "";
-  if (!data.detected) {
-    box.innerHTML = '<div class="result-msg fail">未检测到目标颜色' + tag + "</div>";
-    return;
+  const t = addTask("detect", path, null);
+  finalizeTask(t, r.status, r.lines.map((l) => l + tag), data);
+  // 缓存命中：用独立徽标标记（不可重试）
+  if (sourceTag) {
+    const els = taskEls(t);
+    els.badge.textContent = "缓存";
+    els.badge.className = "badge b-cache";
   }
-  const pts = (data.points || []).map((p) =>
-    "<li>(" + p.x + "," + p.y + ") conf=" + p.confidence.toFixed(3) +
-    (p.matched ? ' <span class="ok">命中</span>' : ' <span class="bad">未命中</span>') + "</li>"
-  ).join("");
-  box.innerHTML =
-    '<div class="result-msg ok">检测到目标颜色' + tag + "</div>" +
-    "<ul class='kv'><li>目标帧（1 基）：<b>#" + (data.frame + 1) + "</b></li>" +
-    "<li>时间戳：<b>" + (data.timestamp ? data.timestamp.toFixed(6) : "?") + " s</b></li>" +
-    "<li>整体置信度：<b>" + (data.confidence ? data.confidence.toFixed(4) : "?") + "</b></li>" +
-    "<li>检测点数：" + (data.points || []).length + "</li></ul>" +
-    "<ul class='points'>" + pts + "</ul>";
-}
-
-function onTrimDone(data) {
-  setBusy("trim", false);
-  renderTrimResult(data);
-  toast("success", "裁剪完成，共 " + data.output_files.length + " 个输出文件");
-  setStatus("裁剪完成");
-  updateActions();
-}
-
-function renderTrimResult(data) {
-  const box = document.getElementById("trimResult");
-  const files = (data.output_files || []).map((f) => "<li>" + esc(f) + "</li>").join("");
-  let rangeLines = "<li>起点：" + (data.frame ? "#" + data.frame + " 帧" : (data.timestamp || 0).toFixed(3) + "s") + "</li>";
-  if (data.end_timestamp != null) {
-    rangeLines += "<li>终点：" +
-      (data.end_frame ? "#" + data.end_frame + " 帧（" + data.end_timestamp.toFixed(3) + "s）"
-                      : data.end_timestamp.toFixed(3) + "s") +
-      "</li>";
-  }
-  box.innerHTML =
-    '<div class="result-msg ok">裁剪完成</div>' +
-    "<ul class='kv'><li>处理方式：<b>" + esc(data.message || "") + "</b></li>" +
-    rangeLines +
-    "<li>保留时长：<b>" + data.cut_duration.toFixed(3) + " s</b></li></ul>" +
-    "<div class='out-title'>输出文件：</div><ul class='points'>" + files + "</ul>";
-}
-
-// ---------------- 取消 ----------------
-function cancelJob(kind) {
-  const jid = state.jobs[kind];
-  if (!jid) return;
-  fetch("/api/jobs/" + jid + "/cancel", { method: "POST" });
-  const label = { detect: "检测", trim: "裁剪", batch: "批处理" }[kind] || "任务";
-  toast("info", "正在取消" + label + "…");
+  return t;
 }
 
 // ---------------- 动作可用性（状态流转） ----------------
@@ -1201,15 +1416,22 @@ function wireUI() {
 
   document.getElementById("btnDetect").addEventListener("click", runDetect);
   document.getElementById("btnTrim").addEventListener("click", runTrim);
-  document.getElementById("detectCancel").addEventListener("click", () => cancelJob("detect"));
-  document.getElementById("trimCancel").addEventListener("click", () => cancelJob("trim"));
+
+  // 任务中心：筛选 chip 与「清空」按钮（两列各一套）
+  ["detect", "trim"].forEach((col) => {
+    const tools = document.querySelector(`.task-tools[data-col="${col}"]`);
+    if (!tools) return;
+    tools.querySelectorAll(".chip").forEach((c) => {
+      c.addEventListener("click", () => switchFilter(col, c.dataset.filter));
+    });
+    tools.querySelector("[data-clear]").addEventListener("click", () => clearFinishedTasks(col));
+  });
 
   // 批处理：选择 + 批量执行
   document.getElementById("btnSelectAll").addEventListener("click", selectAll);
   document.getElementById("btnClearSel").addEventListener("click", clearSelection);
   document.getElementById("btnBatchDetect").addEventListener("click", runBatchDetect);
   document.getElementById("btnBatchTrim").addEventListener("click", runBatchTrim);
-  document.getElementById("batchCancel").addEventListener("click", () => cancelJob("batch"));
 
   // 目录弹窗
   document.getElementById("dirChoose").addEventListener("click", chooseCurrentDir);
@@ -1265,7 +1487,8 @@ async function initApp() {
   initBatchWorkersUI(saved);
   wireUI();
   window.__onTrimParamFilled = (key) => {
-    document.getElementById("panelTrim").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const colEl = document.getElementById("panelTaskTrim");
+    if (colEl) colEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
     const row = rowOf(key || "start_value");
     if (row) {
       row.style.animation = "flash 1s ease 2";

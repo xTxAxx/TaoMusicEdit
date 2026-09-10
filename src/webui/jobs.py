@@ -24,6 +24,14 @@ class JobCancelled(BaseException):
     """
 
 
+class FileCancelled(BaseException):
+    """批量任务中单个文件的中断信号。
+
+    仅终止该文件对应的工作线程，不影响同批其他文件的执行；
+    同样继承自 :class:`BaseException` 以便穿透算法内部的异常捕获。
+    """
+
+
 class Job:
     """单个异步任务的运行状态与事件队列。"""
 
@@ -33,6 +41,7 @@ class Job:
         self.name = name
         self.status = "running"  # running / done / error / cancelled
         self.cancel_event = threading.Event()
+        self.file_cancel: set = set()  # 批量任务中已请求中断的索引集合（1 基）
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
         # 事件历史（供状态查询）与实时队列（供 SSE 消费）
