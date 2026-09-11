@@ -17,6 +17,7 @@ const state = {
   jobTasks: new Map(),     // job_id -> { kind, col, batch, tasks: [], jobId }：SSE 结果定位到任务
   groups: new Map(),       // job_id -> 批量折叠组 { parent, tasks, expanded }
   filters: { detect: "all", trim: "all" },  // 各列筛选：all / running / done / fail
+  _waveActive: { detect: false, trim: false },  // 各列总进度「波次」进行中标记（见 updateColumnTotal）
   _taskSeq: 0,
 };
 
@@ -697,19 +698,22 @@ function updateColumnTotal(col) {
     return;
   }
   if (box) box.hidden = false;
-  // 只统计"当前活动任务集"：有未完成任务时，已完成的历史任务不再拉低总进度；
-  // 全部完成时展示整个列表的最终结果（避免新批次/清空导致进度条往回走）。
-  const activeJobs = new Set();
-  let anyActive = false;
-  arr.forEach((t) => {
-    if (t.status === "pending" || t.status === "running") {
-      anyActive = true;
-      if (t.jobId) activeJobs.add(t.jobId);
-    }
-  });
-  const base = anyActive
-    ? arr.filter((t) => (t.jobId ? activeJobs.has(t.jobId) : t.status === "pending" || t.status === "running"))
-    : arr;
+  // 只统计"当前波次"的任务：上一批的完成任务不拉低总进度；本批任务进入
+  // 待跑/运行时加入波次，完成后保留成员资格——0/8 → 1/8 → … → 8/8 单调推进，
+  // 条宽不回退（不能用"正在运行的 jobId 集合"界定本批，那会把刚完成的任务
+  // 立即剔出分子分母）。全部跑完后再展示整个列表的最终结果。
+  const anyActive = arr.some((t) => t.status === "pending" || t.status === "running");
+  if (anyActive && !state._waveActive[col]) {
+    // 新波次开始：清掉上一波成员标记，历史完成任务退回"不计入"
+    arr.forEach((t) => { t._wave = false; });
+  }
+  if (anyActive) {
+    arr.forEach((t) => {
+      if (t.status === "pending" || t.status === "running") t._wave = true;
+    });
+  }
+  state._waveActive[col] = anyActive;
+  const base = anyActive ? arr.filter((t) => t._wave) : arr;
   // 条宽 = 处理完成率（失败/取消也算"跑完"）；颜色 = 结果质量（绿=全成，橙红=有失败，蓝流光=运行中）
   let sum = 0, success = 0, hasFail = false, running = false;
   base.forEach((t) => {
