@@ -302,7 +302,7 @@ result = Trimmer(cfg).run()
 py -m pytest
 ```
 
-共 **214 个测试**（detector 84 / trimmer 111 / webui 19），实测 **198 通过、16 跳过**；
+共 **218 个测试**（detector 84 / trimmer 111 / webui 23），实测 **202 通过、16 跳过**；
 跳过项均为 detector 的真实视频用例（约定素材 `input*.mp4` 不在仓库时自动跳过），
 合成视频用例始终运行；trimmer 与 webui 用例全部通过。
 
