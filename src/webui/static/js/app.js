@@ -976,8 +976,8 @@ function interruptColumnAll(col) {
 
 function retryTask(t) {
   if (!t.payload) return;
-  if (t.col === "detect") retryDetectTask(t);
-  else retryTrimTask(t);
+  startRetry(t);
+  enqueueRetry(t);
 }
 
 function startRetry(t) {
@@ -1009,16 +1009,6 @@ function parallelWorkers() {
   return Math.max(1, Math.min(hc, 4));  // 与后端 _parallel_workers 默认策略对齐
 }
 
-function retryDetectTask(t) {
-  startRetry(t);
-  enqueueRetry(t);
-}
-
-function retryTrimTask(t) {
-  startRetry(t);
-  enqueueRetry(t);
-}
-
 function enqueueRetry(t) {
   state.retryQueues[t.col].push(t);
   updateTaskActions(t);  // 排队任务可中断（出队即取消）
@@ -1039,10 +1029,16 @@ function pumpRetryQueue(col) {
   }
 }
 
-// 重试失败落终态并让队列继续推进（成功路径的推进由 finishRetryJob 负责）
-function finishRetryFailure(t, msg) {
-  state.retryRunning[t.col].delete(t);
+// 重试失败落终态并让队列继续推进。ctx 存在（启动后阶段的失败，如轮询
+// 连续出错）时走 finishRetryJob 完整清理，避免 jobTasks 遗留死 ctx；
+// 启动前失败（POST 失败/超时）尚无 ctx，仅释放名额。
+function finishRetryFailure(t, msg, ctx) {
   finalizeTask(t, "fail", [msg]);
+  if (ctx) {
+    finishRetryJob(ctx);
+    return;
+  }
+  state.retryRunning[t.col].delete(t);
   pumpRetryQueue(t.col);
 }
 
@@ -1070,6 +1066,18 @@ async function fetchJsonTimeout(url, opts, ms) {
   }
 }
 
+// 终态分发（重试轮询与 SSE 断线兜底共用）：按任务状态落到对应处理器，
+// 返回是否已终态。处理器异常不阻断调用方的清理（名额 / 槽位必须释放）。
+function applyJobStatus(ctx, d) {
+  try {
+    if (d.status === "done") handleJobDone(ctx, d.result || {});
+    else if (d.status === "error") handleJobError(ctx, { message: d.error || "任务执行失败" });
+    else if (d.status === "cancelled") handleJobCancelled(ctx);
+    else return false;
+  } catch (e) { /* 终态已落，副作用失败不影响清理 */ }
+  return true;
+}
+
 // 重试任务进度轮询：不再为每个重试开一条 SSE 长连接（并发重试会把浏览器
 // 同主机连接配额占满，后续任何请求都会被搁置），改用 1s 轮询任务状态，
 // 终态复用批量事件的处理器落任务行。
@@ -1081,24 +1089,13 @@ function pollRetryJob(ctx) {
       const d = await fetchJsonTimeout("/api/jobs/" + ctx.jobId, {}, 5000);
       if (!state.jobTasks.has(ctx.jobId)) return;
       errors = 0;
-      const t = ctx.tasks[0];
-      if (d.status === "done") {
-        try { handleJobDone(ctx, d.result || {}); } catch (e) { /* 终态已落，副作用失败不影响任务 */ }
-        finishRetryJob(ctx);
-        return;
-      }
-      if (d.status === "error") {
-        handleJobError(ctx, { message: d.error || "任务执行失败" });
-        finishRetryJob(ctx);
-        return;
-      }
-      if (d.status === "cancelled") {
-        handleJobCancelled(ctx);
+      if (applyJobStatus(ctx, d)) {
         finishRetryJob(ctx);
         return;
       }
       // 运行中：有进度快照就走与首跑相同的渲染管线（进度条 + 日志），
       // 尚无进度事件时显示已用时
+      const t = ctx.tasks[0];
       if (d.progress) {
         handleJobProgress(ctx, d.progress);
       } else {
@@ -1109,7 +1106,7 @@ function pollRetryJob(ctx) {
     } catch (e) {
       errors++;
       if (errors >= 3) {
-        finishRetryFailure(ctx.tasks[0], "任务状态查询失败：" + e.message);
+        finishRetryFailure(ctx.tasks[0], "任务状态查询失败：" + e.message, ctx);
         return;
       }
     }
@@ -1242,31 +1239,17 @@ function openSSE(jobId, kind) {
     if (settled) return;
     settled = true;
     es.close();
-    if (ctx.retry) {
-      // 重试任务不占用主流程槽位：释放并发名额并推进本列队列
-      const t = ctx.tasks[0];
-      state.retryRunning[ctx.col].delete(t);
-      state.jobTasks.delete(jobId);
-      updateActions();
-      pumpRetryQueue(ctx.col);
-    } else {
-      state.jobs[jobKey] = null;
-      state.jobTasks.delete(jobId);
-      updateActions();
-    }
+    state.jobs[jobKey] = null;
+    state.jobTasks.delete(jobId);
+    updateActions();
   };
   // 网络层断开兜底：SSE 连接中断可能使终态事件（done/error/cancelled）丢失，
   // 主动查询一次任务状态，确保任务结束后按钮与任务状态不被卡死。
   const pollSettled = () => {
-    fetch("/api/jobs/" + jobId)
-      .then((r) => r.json())
+    fetchJsonTimeout("/api/jobs/" + jobId, {}, 5000)
       .then((d) => {
         if (settled || !d.ok) return;
-        if (d.status === "done") handleJobDone(ctx, d.result || {});
-        else if (d.status === "error") handleJobError(ctx, { message: d.error || "任务执行失败" });
-        else if (d.status === "cancelled") handleJobCancelled(ctx);
-        else return; // 仍在运行：交由 SSE 重连继续接收进度与终态
-        stop();
+        if (applyJobStatus(ctx, d)) stop();
       })
       .catch(() => { /* 查询失败不影响 SSE 主流程 */ });
   };
