@@ -228,7 +228,7 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0, end_timestamp=60.0,
 python -m pytest src/trimmer/tests -q
 ```
 
-共 **106 个测试全部通过**（`python -m pytest src/trimmer/tests -q`）。
+共 **111 个测试全部通过**（`python -m pytest src/trimmer/tests -q`）。
 
 包含单元测试（校验、CLI 解析、命令构建含区间 `-to` / `-t` 回退分支、输出路径）
 与集成测试（生成 10 秒测试视频，验证时间戳/帧序号/区间裁剪时长/纯音频/无声/分离/
