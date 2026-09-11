@@ -1017,9 +1017,9 @@ async function runBatchTrim() {
   if (!files.length) return;
   if (state.jobs.batch) return;
   if (!state.outputDir) return;
-  // 批量裁剪不使用终点（以检测结果为起点、保留到片尾），跳过终点校验
-  const v = validateTrim(state, false);
-  if (v.errors.length) return;
+  // 批量裁剪以每个文件各自的检测结果为起点、保留到片尾，
+  // 不使用侧栏的会话级起点 / 终点，因此不做相应校验
+  const params = collectParams(TRIM_PARAMS);
   // 批量裁剪始终使用批量检测的输出结果作为每个文件的裁剪起点
   const items = [];
   let usable = 0;
@@ -1028,18 +1028,22 @@ async function runBatchTrim() {
     if (r && r.detected && r.frame !== null && r.frame !== undefined) { items.push({ path: f, frame: r.frame + 1 }); usable++; }
     else items.push({ path: f, skip: true, reason: "无检测结果（未命中或未执行批量检测）" });
   }
-  if (!usable) return;
+  // 全部文件都无检测结果时任务中心不会产生条目，用状态栏说明原因
+  if (!usable) {
+    setStatus("批量裁剪未执行：选中文件均无有效检测结果，请先执行「检测」或「批量检测」");
+    return;
+  }
   setStatus("批量裁剪中…");
   const tasks = files.map((f, i) => {
     const r = state.batchDetectResults[f];
     return addTask("trim", f,
-      { path: f, output_dir: state.outputDir, params: v.params, frame: (r && r.detected) ? r.frame + 1 : null, index: i + 1 });
+      { path: f, output_dir: state.outputDir, params, frame: (r && r.detected) ? r.frame + 1 : null, index: i + 1 });
   });
   try {
     const res = await fetch("/api/batch/trim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files: items, output_dir: state.outputDir, params: v.params }),
+      body: JSON.stringify({ files: items, output_dir: state.outputDir, params }),
     });
     const data = await res.json();
     if (!data.ok) { tasks.forEach((t) => finalizeTask(t, "fail", ["启动批量裁剪失败：" + (data.message || "")])); return; }

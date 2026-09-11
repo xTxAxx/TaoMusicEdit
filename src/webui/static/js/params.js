@@ -311,8 +311,8 @@ function rowOf(key) {
 
 // 校验 Trim 参数：起点必填、数值/范围正确、与视频信息比对；
 // 终点（可选）方式/数值匹配、范围正确且须大于起点。
-// checkEnd = false 时跳过终点校验（批量裁剪不使用终点）。
-function validateTrim(state, checkEnd = true) {
+// （批量裁剪以检测结果为起点、保留到片尾，不经过本函数）
+function validateTrim(state) {
   const p = collectParams(TRIM_PARAMS);
   const errors = [];
   const mode = p.start_mode;
@@ -347,58 +347,56 @@ function validateTrim(state, checkEnd = true) {
     }
   }
 
-  if (checkEnd) {
-    const endRow = rowOf("end_value");
-    const endMode = String(p.end_mode || "none");
-    const endRaw = String(p.end_value == null ? "" : p.end_value).trim();
-    let endOk = false;   // 终点数值本身合法（可参与与起点的比较）
-    let endNum = NaN;
-    if (endMode === "none") {
-      if (endRaw !== "") {
-        errors.push("终点方式为「无（到片尾）」时不应填写终点值，请清空裁剪终点");
-        if (endRow) showRowError(endRow, "终点方式为「无」时请清空终点值");
-      }
-    } else if (endRaw === "") {
-      errors.push("已选择终点方式，请填写裁剪终点（或改回「无（到片尾）」）");
-      if (endRow) showRowError(endRow, "请填写终点或改回「无」");
-    } else {
-      endNum = Number(endRaw);
-      if (!isFinite(endNum)) {
-        errors.push("裁剪终点必须是数字");
-        if (endRow) showRowError(endRow, "必须是数字");
-      } else if (endMode === "frame") {
-        if (!Number.isInteger(endNum) || endNum < 1) {
-          errors.push("终点帧序号必须是不小于 1 的整数");
-          if (endRow) showRowError(endRow, "帧序号须为 ≥1 的整数");
-        } else if (state.video && state.video.nb_frames &&
-                   endNum > state.video.nb_frames) {
-          errors.push(`终点帧序号 ${endNum} 超出视频总帧数 ${state.video.nb_frames}`);
-          if (endRow) showRowError(endRow, `超出总帧数 ${state.video.nb_frames}`);
-        } else {
-          endOk = true;
-        }
+  const endRow = rowOf("end_value");
+  const endMode = String(p.end_mode || "none");
+  const endRaw = String(p.end_value == null ? "" : p.end_value).trim();
+  let endOk = false;   // 终点数值本身合法（可参与与起点的比较）
+  let endNum = NaN;
+  if (endMode === "none") {
+    if (endRaw !== "") {
+      errors.push("终点方式为「无（到片尾）」时不应填写终点值，请清空裁剪终点");
+      if (endRow) showRowError(endRow, "终点方式为「无」时请清空终点值");
+    }
+  } else if (endRaw === "") {
+    errors.push("已选择终点方式，请填写裁剪终点（或改回「无（到片尾）」）");
+    if (endRow) showRowError(endRow, "请填写终点或改回「无」");
+  } else {
+    endNum = Number(endRaw);
+    if (!isFinite(endNum)) {
+      errors.push("裁剪终点必须是数字");
+      if (endRow) showRowError(endRow, "必须是数字");
+    } else if (endMode === "frame") {
+      if (!Number.isInteger(endNum) || endNum < 1) {
+        errors.push("终点帧序号必须是不小于 1 的整数");
+        if (endRow) showRowError(endRow, "帧序号须为 ≥1 的整数");
+      } else if (state.video && state.video.nb_frames &&
+                 endNum > state.video.nb_frames) {
+        errors.push(`终点帧序号 ${endNum} 超出视频总帧数 ${state.video.nb_frames}`);
+        if (endRow) showRowError(endRow, `超出总帧数 ${state.video.nb_frames}`);
       } else {
-        if (endNum <= 0) {
-          errors.push("终点时间戳必须大于 0");
-          if (endRow) showRowError(endRow, "时间戳须大于 0");
-        } else if (state.video && endNum > state.video.duration) {
-          errors.push(`终点时间戳 ${endNum}s 超出视频时长 ${state.video.duration.toFixed(3)}s`);
-          if (endRow) showRowError(endRow, `超出时长 ${state.video.duration.toFixed(3)}s`);
-        } else {
-          endOk = true;
-        }
+        endOk = true;
+      }
+    } else {
+      if (endNum <= 0) {
+        errors.push("终点时间戳必须大于 0");
+        if (endRow) showRowError(endRow, "时间戳须大于 0");
+      } else if (state.video && endNum > state.video.duration) {
+        errors.push(`终点时间戳 ${endNum}s 超出视频时长 ${state.video.duration.toFixed(3)}s`);
+        if (endRow) showRowError(endRow, `超出时长 ${state.video.duration.toFixed(3)}s`);
+      } else {
+        endOk = true;
       }
     }
-    // 终点须大于起点（换算为秒比较；起点未填 / 非法时由起点校验与后端处理）
-    if (endOk && raw !== "") {
-      const sNum = Number(raw);
-      if (isFinite(sNum)) {
-        const fps = (state.video && state.video.fps) || 30;
-        const toSec = (m, v) => (m === "timestamp" ? v : (v - 1) / fps);
-        if (toSec(endMode, endNum) <= toSec(String(mode || "frame"), sNum)) {
-          errors.push("终点必须大于起点");
-          if (endRow) showRowError(endRow, "终点须大于起点");
-        }
+  }
+  // 终点须大于起点（换算为秒比较；起点未填 / 非法时由起点校验与后端处理）
+  if (endOk && raw !== "") {
+    const sNum = Number(raw);
+    if (isFinite(sNum)) {
+      const fps = (state.video && state.video.fps) || 30;
+      const toSec = (m, v) => (m === "timestamp" ? v : (v - 1) / fps);
+      if (toSec(endMode, endNum) <= toSec(String(mode || "frame"), sNum)) {
+        errors.push("终点必须大于起点");
+        if (endRow) showRowError(endRow, "终点须大于起点");
       }
     }
   }
