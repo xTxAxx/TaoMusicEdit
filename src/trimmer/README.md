@@ -39,8 +39,6 @@ trimmer/
 ├── utils/
 │   ├── validation.py      # 参数严格校验
 │   └── logger.py          # 日志
-├── examples/
-│   └── usage_example.py   # Python API 使用示例
 └── tests/                 # 单元测试 + 集成测试
 ```
 
@@ -191,8 +189,6 @@ Trimmer(TrimmerConfig(input_path="input.mp4", timestamp=5.0, end_timestamp=60.0,
 `TrimmerConfig` 终点字段：`end_timestamp`（`float | None`）与 `end_frame`（`int | None`）
 二选一、均可缺省（缺省 = 保留到片尾）；`TrimmerResult` 相应提供
 `end_timestamp` / `end_frame` 与按 `end - start` 计算的 `cut_duration`。
-
-更完整的示例见 `src/trimmer/examples/usage_example.py`。
 
 ## 错误码
 

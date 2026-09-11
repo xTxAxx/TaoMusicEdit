@@ -56,8 +56,6 @@ detector/
 │   ├── color.py           # 颜色转换、置信度度量
 │   └── logger.py          # 统一日志
 ├── tests/                 # 单元 / 集成 / 性能测试
-├── examples/
-│   └── usage_example.py   # 使用示例
 └── README.md
 ```
 
@@ -119,13 +117,6 @@ if result.detected:
     print(f"整体置信度: {result.details.confidence:.4f}")
     for p in result.details.point_matches:
         print(f"点({p.x},{p.y}) RGB={p.rgb} conf={p.confidence:.4f} matched={p.matched}")
-```
-
-运行示例脚本（可在任意工作目录执行，脚本会自行定位仓库内的视频素材）：
-
-```bash
-py src\detector\examples\usage_example.py            # 自动定位：input*.mp4 优先，其次仓库根任意 .mp4
-py src\detector\examples\usage_example.py input2.mp4 # 指定视频（相对路径按当前工作目录解析）
 ```
 
 运行测试：

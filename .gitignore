@@ -44,9 +44,6 @@ src/webui/detect_cache.json.migrated
 # 运行时用户设置（workspace / 输出目录 / 参数），由 src/webui/settings.py 生成
 src/webui/settings.json
 
-# trimmer 示例脚本运行输出（src/trimmer/examples/usage_example.py 生成）
-src/trimmer/examples/output/
-
 # ============ 测试 / 演示用视频素材（避免提交大体积二进制） ============
 /input1.mp4
 /input2.mp4
@@ -64,6 +61,8 @@ src/trimmer/examples/output/
 # 助手工作记忆目录，以及按需生成的代码审查报告（如《代码冗余审查报告.md》）
 .workbuddy/
 代码冗余审查报告.md
+# 本地视频工作区（素材与裁剪输出，大体积二进制不入库）
+/work/
 
 # ============ 操作系统 ============
 Thumbs.db

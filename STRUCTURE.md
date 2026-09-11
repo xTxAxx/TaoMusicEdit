@@ -40,7 +40,6 @@ TaoMusicEdit/
 | `detector/config.py` | `DetectorConfig` 全部可调参数 |
 | `detector/core/` | **核心实现**：`algorithm.py`（检测算法）、`detector.py`（主入口）、`matcher.py`（匹配器）、`errors.py`（异常层级） |
 | `detector/utils/` | **工具函数**：`ffmpeg.py`（抽帧/探测）、`color.py`（颜色转换与度量）、`logger.py`（日志） |
-| `detector/examples/` | API 使用示例脚本 |
 | `detector/tests/` | pytest 单元/集成测试（含 `conftest.py` 共享夹具） |
 | `detector/README.md` | 模块使用文档 |
 
@@ -53,7 +52,6 @@ TaoMusicEdit/
 | `trimmer/cli.py` | 命令行入口（推荐 `py src\trimmer\cli.py` 直跑） |
 | `trimmer/core/` | **核心实现**：`trimmer.py`（裁剪引擎）、`ffmpeg.py`（FFmpeg 封装）、`probe.py`（媒体探测）、`errors.py` |
 | `trimmer/utils/` | **工具函数**：`validation.py`（参数校验）、`logger.py`（日志） |
-| `trimmer/examples/` | API 使用示例脚本 |
 | `trimmer/tests/` | pytest 单元/集成测试 |
 | `trimmer/pyproject.toml` | 独立打包配置（`pip install ./src/trimmer` 可安装为 `trimmer` 命令） |
 | `trimmer/README.md` | 模块使用文档 |
@@ -75,9 +73,9 @@ TaoMusicEdit/
 ## 4. 文件存放规范
 
 1. **新代码入对应功能包**：检测逻辑入 `src/detector/`，裁剪逻辑入 `src/trimmer/`，Web 前后端入 `src/webui/`；禁止在根目录新增业务源码。
-2. **子目录职责固定**：`core/` = 核心实现、`utils/` = 工具函数、`examples/` = 使用示例、`tests/` = 测试；新文件按职责归入对应子目录。
+2. **子目录职责固定**：`core/` = 核心实现、`utils/` = 工具函数、`tests/` = 测试；新文件按职责归入对应子目录。
 3. **vendored 依赖仅限 `src/webui/_vendor/`**：任何第三方包不得手工复制到其它位置；需要时通过 requirements.txt 重建。
-4. **运行期产物不入库**：`src/webui/settings.json`（用户设置）、`src/webui/detect_cache.db*`（检测结果缓存 SQLite）、`src/webui/detect_cache.json*`（更早版本遗留的 JSON 缓存文件，迁移代码已移除，仅保留忽略规则以防误入库）、`src/trimmer/examples/output/`（示例脚本运行输出）、`__pycache__/`、`.pytest_cache/`、`*.egg-info/` 等均由 `.gitignore` 忽略，可安全删除重建。
+4. **运行期产物不入库**：`src/webui/settings.json`（用户设置）、`src/webui/detect_cache.db*`（检测结果缓存 SQLite）、`src/webui/detect_cache.json*`（更早版本遗留的 JSON 缓存文件，迁移代码已移除，仅保留忽略规则以防误入库）、`__pycache__/`、`.pytest_cache/`、`*.egg-info/` 等均由 `.gitignore` 忽略，可安全删除重建。
 5. **测试素材不提交**：仓库根目录的 `*.mp4` 测试视频为 git 忽略文件，勿 `git add`。
 
 ## 5. 导入约定
