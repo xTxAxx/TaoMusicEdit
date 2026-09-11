@@ -655,12 +655,16 @@ function removeTask(t) {
   if (i >= 0) arr.splice(i, 1);
   const els = taskEls(t);
   if (els && els.row && els.row.parentNode) els.row.parentNode.removeChild(els.row);
-  // 折叠组内任务删空后移除组头
+  // 折叠组内任务删空后移除组头；否则摘要随删行收窄
   if (t.groupKey) {
     const g = state.groups.get(t.groupKey);
-    if (g && g.tasks.every((tt) => !tasksOf(t.col).includes(tt))) {
-      if (g.parent && g.parent.parentNode) g.parent.parentNode.removeChild(g.parent);
-      state.groups.delete(t.groupKey);
+    if (g) {
+      if (g.tasks.every((tt) => !tasksOf(t.col).includes(tt))) {
+        if (g.parent && g.parent.parentNode) g.parent.parentNode.removeChild(g.parent);
+        state.groups.delete(t.groupKey);
+      } else {
+        refreshGroupSummary(g);
+      }
     }
   }
   updateColumnTotal(t.col);
@@ -745,6 +749,7 @@ function refreshTaskVisibility(t) {
 
 // ---------------- 批量折叠组 ----------------
 // 批量任务结束后折叠为一行摘要（可展开查看逐文件明细）。
+// 摘要是实时投影：重算自「仍存在于列中的组内任务」，重试 / 删行后自动跟进。
 function collapseBatch(ctx) {
   if (!ctx.batch || !ctx.tasks || ctx.tasks.length <= 1) return;
   if (state.groups.has(ctx.jobId)) return;
@@ -763,21 +768,31 @@ function collapseBatch(ctx) {
   parent.appendChild(summary);
   firstEl.parentNode.insertBefore(parent, firstEl);
 
-  const ok = tasks.filter((t) => t.status === "success").length;
-  const fail = tasks.filter((t) => t.status === "fail").length;
-  const canc = tasks.filter((t) => t.status === "cancelled").length;
-  const label = ctx.kind === "batch_detect" ? "批量检测" : "批量裁剪";
-  title.textContent = label + " · " + tasks.length + " 个文件";
-  let sum = ok + "/" + tasks.length;
-  if (fail) sum += " · 失败 " + fail;
-  if (canc) sum += " · 取消 " + canc;
-  summary.textContent = sum;
-
-  const g = { parent, tasks, expanded: false };
+  const g = {
+    parent, tasks, expanded: false,
+    kind: ctx.kind === "batch_detect" ? "批量检测" : "批量裁剪",
+    title, summary,
+  };
   state.groups.set(ctx.jobId, g);
   tasks.forEach((t) => { taskEls(t).row.classList.add("group-hide"); });
   parent.addEventListener("click", () => toggleBatchGroup(g));
+  refreshGroupSummary(g);
   refreshGroupVisibility(ctx.col);
+}
+
+// 重算折叠组摘要：只统计仍存在于列中的组内任务（已删行不计入）。
+// 由 collapseBatch（构建）、finalizeTask / startRetry（重试流）、removeTask（删行）触发。
+function refreshGroupSummary(g) {
+  const arr = tasksOf(g.tasks[0].col);
+  const live = g.tasks.filter((t) => arr.includes(t));
+  const ok = live.filter((t) => t.status === "success").length;
+  const fail = live.filter((t) => t.status === "fail").length;
+  const canc = live.filter((t) => t.status === "cancelled").length;
+  g.title.textContent = g.kind + " · " + live.length + " 个文件";
+  let sum = ok + "/" + live.length;
+  if (fail) sum += " · 失败 " + fail;
+  if (canc) sum += " · 取消 " + canc;
+  g.summary.textContent = sum;
 }
 
 function toggleBatchGroup(g) {
@@ -867,6 +882,8 @@ function finalizeTask(t, status, lines, result, error) {
   (lines || []).forEach((l) => taskLog(t, l));
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  const g = t.groupKey && state.groups.get(t.groupKey);
+  if (g) refreshGroupSummary(g);
 }
 
 function updateTaskActions(t) {
@@ -957,6 +974,8 @@ function startRetry(t) {
   els.log.classList.add("collapsed");
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  const g = t.groupKey && state.groups.get(t.groupKey);
+  if (g) refreshGroupSummary(g);  // 重试使任务回到未完成态，摘要立即跟进
 }
 
 async function retryDetectTask(t) {
