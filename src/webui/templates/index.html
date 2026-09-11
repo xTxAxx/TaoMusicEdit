@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaoMusicEdit · 视频检测与裁剪工作台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=30">
+<link rel="stylesheet" href="/static/css/style.css?v=31">
 </head>
 <body>
 
@@ -31,14 +31,14 @@
       <div class="path-label">工作目录</div>
       <div class="path-row">
         <input type="text" id="workspacePath" placeholder="输入工作目录路径" autocomplete="off" spellcheck="false">
-        <button class="btn" id="workspaceBrowse" data-tip="打开目录浏览弹窗">浏览</button>
+        <button class="btn" id="workspaceBrowse" title="打开目录浏览弹窗">浏览</button>
         <button class="btn primary" id="workspaceLoad">载入</button>
       </div>
       <div class="info-line" id="workspaceInfo"></div>
       <div class="path-label">输出目录</div>
       <div class="path-row">
         <input type="text" id="outputPath" placeholder="输出目录" autocomplete="off" spellcheck="false">
-        <button class="btn" id="outputBrowse" data-tip="打开目录浏览弹窗">浏览</button>
+        <button class="btn" id="outputBrowse" title="打开目录浏览弹窗">浏览</button>
       </div>
       <div class="info-line" id="outputInfo"></div>
     </section>
@@ -62,14 +62,14 @@
           <span class="param-group-count">2</span>
         </div>
         <div class="param-group-body">
-          <div class="param-row" data-key="batch_workers" data-tip="0 表示自动（按 CPU 核数，封顶 16）；过高会占用大量磁盘与 CPU">
+          <div class="param-row" data-key="batch_workers" title="0 表示自动（按 CPU 核数，封顶 16）；过高会占用大量磁盘与 CPU">
             <label class="param-label" for="param-batch_workers">并发数</label>
             <div class="param-ctl">
               <input type="number" id="param-batch_workers" min="0" max="16" step="1" placeholder="0">
             </div>
             <div class="param-desc">批量任务同时执行的个数</div>
           </div>
-          <label class="chk skip-cached-row" data-tip="批量检测时自动跳过缓存库中已有有效结果的视频">
+          <label class="chk skip-cached-row" title="批量检测时自动跳过缓存库中已有有效结果的视频">
             <input type="checkbox" id="skipCached"> 跳过已缓存项
           </label>
         </div>
@@ -81,14 +81,14 @@
           <span class="param-group-count">2</span>
         </div>
         <div class="param-group-body">
-          <div class="param-row" data-key="cache_enabled" data-tip="开启后刷新页面 / 重启服务仍会自动匹配上次检测结果，无需重新检测。默认开启">
+          <div class="param-row" data-key="cache_enabled" title="开启后刷新页面 / 重启服务仍会自动匹配上次检测结果，无需重新检测。默认开启">
             <label class="param-label" for="param-cache_enabled">缓存开关</label>
             <div class="param-ctl">
               <input type="checkbox" id="param-cache_enabled" class="bool-input">
             </div>
             <div class="param-desc">检测结果的持久化保存</div>
           </div>
-          <div class="param-row" data-key="cache_limit" data-tip="超出上限自动淘汰最旧的条目；0 表示不限">
+          <div class="param-row" data-key="cache_limit" title="超出上限自动淘汰最旧的条目；0 表示不限">
             <label class="param-label" for="param-cache_limit">条目上限</label>
             <div class="param-ctl">
               <input type="number" id="param-cache_limit" min="0" step="10" placeholder="0">
@@ -98,11 +98,11 @@
           <div class="cache-stats muted-text" id="cacheStats"></div>
           <div class="cache-actions">
             <button class="btn small" id="btnRefreshCacheStats"
-                    data-tip="重新读取缓存条目数量">刷新统计</button>
+                    title="重新读取缓存条目数量">刷新统计</button>
             <button class="btn small" id="btnPruneCache"
-                    data-tip="删除源文件已丢失、已修改或结果损坏的缓存条目">清理失效条目</button>
+                    title="删除源文件已丢失、已修改或结果损坏的缓存条目">清理失效条目</button>
             <button class="btn small danger" id="btnClearCache"
-                    data-tip="删除全部检测结果缓存条目">清空缓存</button>
+                    title="删除全部检测结果缓存条目">清空缓存</button>
           </div>
         </div>
       </section>
@@ -110,7 +110,7 @@
 
     <div class="sidebar-foot">
       <button class="btn subtle" id="resetSettings"
-              data-tip="删除配置文件，将工作区、输出目录及全部参数恢复为默认值">↺ 恢复默认设置</button>
+              title="删除配置文件，将工作区、输出目录及全部参数恢复为默认值">↺ 恢复默认设置</button>
     </div>
 
   </aside>
@@ -252,7 +252,7 @@
   </div>
 </div>
 
-<script src="/static/js/params.js?v=14"></script>
+<script src="/static/js/params.js?v=15"></script>
 <script src="/static/js/player.js?v=12"></script>
 <script src="/static/js/app.js?v=41"></script>
 </body>

@@ -495,8 +495,7 @@ body {
 .sidebar .params { display: flex; flex-direction: column; gap: 8px; }
 
 /* ---------------- 参数子分组（卡片内二级层次，高级组默认折叠） ---------------- */
-/* 折叠只隐藏 .param-group-body，不销毁 DOM：折叠态下仍可通过 param-<key> 定位行。
-   容器不加 overflow:hidden——data-tip 气泡向上弹出，需要溢出容器绘制 */
+/* 折叠只隐藏 .param-group-body，不销毁 DOM：折叠态下仍可通过 param-<key> 定位行 */
 .sidebar .param-group {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -573,28 +572,6 @@ input[type="number"] {
 .param-desc { grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); }
 .param-error { grid-column: 1 / -1; font-size: 11.5px; color: var(--bad); }
 .param-tip { grid-column: 1 / -1; font-size: 11.5px; color: var(--ok); }
-
-/* ---------------- 悬停提示气泡（data-tip，替代原生 title） ----------------
-   纯 CSS 实现：气泡常驻 DOM 但透明，hover / 键盘聚焦时显示；
-   0.3s 过渡延迟防止扫过时误闪；触屏与无鼠标场景仍有行内短 desc 降级 */
-[data-tip] { position: relative; }
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute; left: 50%; bottom: calc(100% + 6px);
-  transform: translateX(-50%);
-  width: max-content; max-width: 280px; white-space: normal;
-  background: var(--card-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 9px; font-size: 11.5px; line-height: 1.5;
-  text-align: left; z-index: 50; pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-  opacity: 0; visibility: hidden;
-  transition: opacity 0s linear 0.3s, visibility 0s linear 0.3s;
-}
-[data-tip]:hover::after, [data-tip]:focus-visible::after {
-  opacity: 1; visibility: visible;
-  transition: opacity 0s linear 0s, visibility 0s linear 0s;
-}
 
 /* ---------------- 检测缓存设置（批处理与缓存卡片） ---------------- */
 .cache-stats { font-size: 11.5px; margin: 2px 8px 0; }

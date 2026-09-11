@@ -2,7 +2,7 @@
 "use strict";
 
 // 文案三层模型：label ≤6 字名词；desc ≤25 字只写语义（行内常显）；tip ≤80 字承载
-// 取值范围 / 默认值 / 联动关系 / 操作提示（悬停气泡，渲染层见 buildParamsForm）
+// 取值范围 / 默认值 / 联动关系 / 操作提示（经原生 title 提示展示，见 buildParamRow）
 // Detector 参数定义（对应 detector/config.py DetectorConfig 可配置项）
 const DETECTOR_PARAMS = [
   { key: "target_color", label: "目标颜色", type: "text", default: "#F7F10F",
@@ -183,8 +183,8 @@ function buildParamRow(p, values) {
   desc.className = "param-desc";
   desc.textContent = p.desc || "";
   row.appendChild(desc);
-  // 悬停详情气泡（纯 CSS，见 style.css [data-tip]）；行内短 desc 始终保留作触屏降级
-  if (p.tip) row.dataset.tip = p.tip;
+  // 悬停详情用原生 title 提示（与播放器控件一致）；行内短 desc 始终保留
+  if (p.tip) row.title = p.tip;
   return row;
 }
 
@@ -244,7 +244,7 @@ function buildParamsForm(container, spec, values) {
       const tag = document.createElement("span");
       tag.className = "param-group-tag";
       tag.textContent = g.tag;
-      if (g.tagTip) tag.dataset.tip = g.tagTip;
+      if (g.tagTip) tag.title = g.tagTip;
       head.appendChild(tag);
     }
     head.appendChild(count);
