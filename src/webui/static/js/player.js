@@ -85,6 +85,7 @@ const Player = (function () {
 
     // 视频事件
     els.video.addEventListener("loadedmetadata", () => {
+      updateStageAspect();
       updateHud();
       render();
     });
@@ -815,6 +816,14 @@ const Player = (function () {
   }
 
   // ---------------- 信息显示 ----------------
+  // 把视频宽高比写入根节点 --ar：.player-card / .task-panels 以「52vh × --ar」限宽，
+  // 舞台经 aspect-ratio 与视频同比例，宽屏下不再出现左右黑边。
+  function updateStageAspect() {
+    const vw = els.video.videoWidth, vh = els.video.videoHeight;
+    if (!vw || !vh) return;
+    document.documentElement.style.setProperty("--ar", (vw / vh).toFixed(4));
+  }
+
   function updateHud() {
     const dur = info ? info.duration : 0;
     els.timecode.textContent = formatTime(currentTime) + " / " + formatTime(dur);

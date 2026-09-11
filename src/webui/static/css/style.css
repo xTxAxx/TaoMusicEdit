@@ -15,6 +15,10 @@
   --radius: 10px;
   --sidebar-w: 330px;
   --mono: "Consolas", "Courier New", monospace;
+  /* 视频宽高比（player.js 在 loadedmetadata 时更新）。
+     播放器卡片与任务中心都以「52vh × --ar」限宽，使舞台与视频比例一致（无黑边）、
+     中列在宽屏下不会无限拉伸。 */
+  --ar: 1.7778;
 }
 
 /* 尊重 hidden 属性：作者的 display 声明会覆盖 UA 的 [hidden]{display:none}，
@@ -240,10 +244,18 @@ body {
 .placeholder { color: var(--text-dim); font-size: 12px; padding: 14px; text-align: center; }
 
 /* ---------------- 播放器 ---------------- */
-.player-card { display: flex; flex-direction: column; gap: 10px; }
+/* 卡片限宽 = 52vh × 视频宽高比（保底 720px，防止竖屏视频把控制条挤爆）；
+   舞台再按宽高比独立限宽居中，竖屏视频时舞台窄于卡片、两侧露出卡片底色而非黑边。 */
+.player-card {
+  display: flex; flex-direction: column; gap: 10px;
+  width: 100%; max-width: min(100%, max(720px, calc(52vh * var(--ar))));
+  margin: 0 auto;
+}
 .player-stage {
   position: relative;
-  height: 52vh; min-height: 320px;
+  width: min(100%, calc(52vh * var(--ar)));
+  aspect-ratio: var(--ar); min-height: 240px;
+  margin: 0 auto;
   background: #000;
   border-radius: 8px; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
@@ -355,11 +367,16 @@ body {
 .end-badge.on:hover { background: rgba(231,76,60,0.12); }
 
 /* ---------------- 任务中心（左右两卡片） ---------------- */
+/* 限宽居中：与播放器同一上限（52vh × --ar），竖屏视频等特窄场景保底 880px，
+   保证两列可用；min(100%, …) 防小屏溢出。 */
 .task-panels {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
   align-items: start;
+  width: 100%;
+  max-width: min(100%, max(880px, calc(52vh * var(--ar))));
+  margin: 0 auto;
 }
 /* 每张卡片限位：避免子项挤压/溢出 */
 .task-panel { min-width: 0; }
@@ -642,7 +659,9 @@ input[type="number"] {
     border-right: none; border-bottom: 1px solid var(--border);
   }
   .main { min-height: 70vh; }
-  .player-stage { height: 44vh; min-height: 240px; }
+  /* 窄屏回到固定高舞台（宽高比限宽在矮窗口会算出过窄的卡片） */
+  .player-card { max-width: 100%; }
+  .player-stage { height: 44vh; min-height: 240px; aspect-ratio: auto; }
   .player-controls, .meta-line { gap: 6px; }
 }
 @media (max-width: 600px) {
