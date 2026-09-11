@@ -199,3 +199,92 @@ class TestOutputPaths:
         paths = self._trimmer(tmp_path, timestamp=1.0,
                               output=str(tmp_path / "custom.mkv"))._resolve_output_paths()
         assert paths["main"] == os.path.join(os.path.abspath(str(tmp_path)), "custom.mkv")
+
+
+class TestAtomicOutput:
+    """输出经临时文件落盘的测试（monkeypatch FFmpegRunner，不调用 ffmpeg）。"""
+
+    class _FakeRunner:
+        """模拟 ffmpeg：向参数末位的输出路径写入内容，可注入失败行为。"""
+
+        def __init__(self, behavior=None):
+            self._behavior = behavior
+
+        def run(self, args, total_duration=None, progress_cb=None, cancel_event=None):
+            out = args[-1]
+            if callable(self._behavior):
+                self._behavior(out)
+            else:
+                with open(out, "wb") as f:
+                    f.write(b"out-content")
+
+    def _trimmer(self, tmp_path, **cfg_kw):
+        video = tmp_path / "in.mp4"
+        video.write_bytes(b"x")
+        cfg_kw.setdefault("input_path", str(video))
+        t = Trimmer(TrimmerConfig(timestamp=1.0, **cfg_kw))
+        t.input_path = os.path.abspath(str(video))
+        t.media = _media()
+        t.out_duration = 10.0
+        return t
+
+    def _run_one_plan(self, tmp_path, monkeypatch, behavior=None, **cfg_kw):
+        """跑通 _build_plans → _execute 链路（单计划模式），返回最终输出路径。"""
+        t = self._trimmer(tmp_path, **cfg_kw)
+        t.output_paths = t._resolve_output_paths()
+        monkeypatch.setattr("trimmer.core.trimmer.FFmpegRunner",
+                            lambda: self._FakeRunner(behavior))
+        (video_enc, audio_enc, hwaccel, _gpu) = ("copy", "copy", [], None)
+        plans = t._build_plans(video_enc, audio_enc, hwaccel)
+        assert len(plans) == 1
+        out_path, tmp_path_, args, _label = plans[0]
+        t._execute(out_path, tmp_path_, args, "测试", None)
+        return out_path
+
+    def test_tmp_path_keeps_extension(self):
+        # 临时路径在扩展名前插入 .part：ffmpeg 靠扩展名推断封装格式，不能破坏
+        assert Trimmer._tmp_path_for("/x/video_trim.mp4").endswith("video_trim.part.mp4")
+        assert Trimmer._tmp_path_for("/x/audio.m4a").endswith("audio.part.m4a")
+
+    def test_success_renames_tmp_to_final(self, tmp_path, monkeypatch):
+        out = self._run_one_plan(tmp_path, monkeypatch)
+        assert os.path.isfile(out)
+        with open(out, "rb") as f:
+            assert f.read() == b"out-content"
+        assert not os.path.exists(Trimmer._tmp_path_for(out))
+
+    def test_cancel_cleans_tmp_keeps_final(self, tmp_path, monkeypatch):
+        # 中断（KeyboardInterrupt）：临时文件被清理，最终路径保持原状
+        out_file = tmp_path / "in_trim.mp4"
+        out_file.write_bytes(b"old-final")
+
+        def _cancel_and_write(out):
+            with open(out, "wb") as f:
+                f.write(b"partial")
+            raise KeyboardInterrupt("用户取消")
+
+        with pytest.raises(KeyboardInterrupt):
+            self._run_one_plan(tmp_path, monkeypatch, behavior=_cancel_and_write)
+        assert out_file.read_bytes() == b"old-final"
+        assert not os.path.exists(Trimmer._tmp_path_for(str(out_file)))
+
+    def test_ffmpeg_failure_cleans_tmp(self, tmp_path, monkeypatch):
+        out_file = tmp_path / "in_trim.mp4"
+
+        def _fail(out):
+            with open(out, "wb") as f:
+                f.write(b"garbage")
+            raise FFmpegExecutionError("ffmpeg 执行失败（退出码 1）。")
+
+        with pytest.raises(FFmpegExecutionError):
+            self._run_one_plan(tmp_path, monkeypatch, behavior=_fail)
+        assert not os.path.exists(out_file)  # 最终路径从未被触碰
+        assert not os.path.exists(Trimmer._tmp_path_for(str(out_file)))
+
+    def test_overwrite_replaces_existing_final(self, tmp_path, monkeypatch):
+        out_file = tmp_path / "in_trim.mp4"
+        out_file.write_bytes(b"old")
+        out = self._run_one_plan(tmp_path, monkeypatch)
+        with open(out, "rb") as f:
+            assert f.read() == b"out-content"
+        assert not os.path.exists(Trimmer._tmp_path_for(str(out_file)))

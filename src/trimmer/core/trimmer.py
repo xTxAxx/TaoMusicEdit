@@ -374,26 +374,32 @@ class Trimmer:
 
     def _build_plans(
         self, video_encoder: str, audio_encoder: str, hwaccel_args: List[str]
-    ) -> List[Tuple[str, List[str], str]]:
-        """根据输出模式生成一条或多条 (输出路径, ffmpeg 参数, 描述) 计划。"""
+    ) -> List[Tuple[str, str, List[str], str]]:
+        """根据输出模式生成一条或多条 (最终路径, 临时路径, ffmpeg 参数, 描述) 计划。
+
+        ffmpeg 一律写入临时路径（扩展名保持不变以便正确推断封装格式），
+        成功后由 :meth:`_execute` 原子替换为最终路径。
+        """
         mode = self.config.output_mode
-        plans: List[Tuple[str, List[str], str]] = []
+        plans: List[Tuple[str, str, List[str], str]] = []
 
         if mode in (OutputMode.FULL, OutputMode.VIDEO_ONLY):
             include_video = True
             include_audio = mode == OutputMode.FULL
             out = self.output_paths["main"]
+            tmp = self._tmp_path_for(out)
             label = "完整视频" if include_audio else "无声视频"
-            plans.append((out, build_command(
-                self.config, self.media, self.input_path, self.start_time, out,
+            plans.append((out, tmp, build_command(
+                self.config, self.media, self.input_path, self.start_time, tmp,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=include_video, include_audio=include_audio,
                 hwaccel_args=hwaccel_args, end_time=self.end_time), label))
 
         elif mode == OutputMode.AUDIO_ONLY:
             out = self.output_paths["main"]
-            plans.append((out, build_command(
-                self.config, self.media, self.input_path, self.start_time, out,
+            tmp = self._tmp_path_for(out)
+            plans.append((out, tmp, build_command(
+                self.config, self.media, self.input_path, self.start_time, tmp,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=False, include_audio=True,
                 hwaccel_args=[], end_time=self.end_time), "纯音频"))
@@ -401,13 +407,15 @@ class Trimmer:
         else:  # SPLIT
             vout = self.output_paths["video"]
             aout = self.output_paths["audio"]
-            plans.append((vout, build_command(
-                self.config, self.media, self.input_path, self.start_time, vout,
+            vtmp = self._tmp_path_for(vout)
+            atmp = self._tmp_path_for(aout)
+            plans.append((vout, vtmp, build_command(
+                self.config, self.media, self.input_path, self.start_time, vtmp,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=True, include_audio=False,
                 hwaccel_args=hwaccel_args, end_time=self.end_time), "分离视频"))
-            plans.append((aout, build_command(
-                self.config, self.media, self.input_path, self.start_time, aout,
+            plans.append((aout, atmp, build_command(
+                self.config, self.media, self.input_path, self.start_time, atmp,
                 video_encoder=video_encoder, audio_encoder=audio_encoder,
                 include_video=False, include_audio=True,
                 hwaccel_args=[], end_time=self.end_time), "分离音频"))
@@ -418,23 +426,50 @@ class Trimmer:
                    hwaccel_args: List[str], progress_cb,
                    cancel_event: Optional[threading.Event] = None) -> None:
         plans = self._build_plans(video_encoder, audio_encoder, hwaccel_args)
-        for out_path, args, label in plans:
-            self._execute(out_path, args, label, progress_cb, cancel_event)
+        for out_path, tmp_path, args, label in plans:
+            self._execute(out_path, tmp_path, args, label, progress_cb, cancel_event)
 
-    def _execute(self, out_path: str, args: List[str], label: str, progress_cb,
+    @staticmethod
+    def _tmp_path_for(final_path: str) -> str:
+        """输出临时路径：扩展名保持不变（ffmpeg 按扩展名推断封装格式）。"""
+        base, ext = os.path.splitext(final_path)
+        return base + ".part" + ext
+
+    @staticmethod
+    def _discard_partial(tmp_path: str) -> None:
+        """清理临时输出文件；不存在时静默跳过。"""
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("清理临时文件失败: %s（%s）", tmp_path, exc)
+
+    def _execute(self, out_path: str, tmp_path: str, args: List[str], label: str, progress_cb,
                  cancel_event: Optional[threading.Event] = None) -> None:
+        """执行单条输出计划：ffmpeg 写入临时文件，成功后替换为最终输出。
+
+        中断 / 失败时清理临时文件——最终路径要么保持原状、要么是完整的新文件，
+        不会残留不可播放的半成品。
+        """
         logger.info("正在生成%s: %s", label, out_path)
         runner = FFmpegRunner()
-        runner.run(args, total_duration=self.out_duration, progress_cb=progress_cb,
-                   cancel_event=cancel_event)
-        if not os.path.exists(out_path):
-            # 流复制区间模式下双端吸附关键帧可能导不出任何内容 → 明确报错
+        try:
+            runner.run(args, total_duration=self.out_duration, progress_cb=progress_cb,
+                       cancel_event=cancel_event)
+            if not os.path.exists(tmp_path):
+                # 流复制区间模式下双端吸附关键帧可能导不出任何内容 → 明确报错
+                if self.end_time is not None and not self.config.reencode:
+                    raise FFmpegExecutionError(self._empty_interval_message())
+                logger.warning("未检测到输出文件: %s", out_path)
+                return
             if self.end_time is not None and not self.config.reencode:
-                raise FFmpegExecutionError(self._empty_interval_message())
-            logger.warning("未检测到输出文件: %s", out_path)
-            return
-        if self.end_time is not None and not self.config.reencode:
-            self._check_interval_output(out_path)
+                self._check_interval_output(tmp_path)
+            # 成功才落地：原子替换最终输出（覆盖已有文件）
+            os.replace(tmp_path, out_path)
+        except BaseException:
+            self._discard_partial(tmp_path)
+            raise
 
     def _empty_interval_message(self) -> str:
         return (f"流复制模式下区间 [{self.start_time:.3f}s, {self.end_time:.3f}s) "
