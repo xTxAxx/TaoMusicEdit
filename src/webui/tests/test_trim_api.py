@@ -223,3 +223,52 @@ class TestBatchTrimIgnoresEnd:
         assert calls, "build_trimmer_config 应被调用"
         assert "end_mode" not in calls[0] and "end_value" not in calls[0]
         assert result["summary"]["ok"] == 1
+
+
+class TestJobEventReplay:
+    """任务事件回放缓冲：轮询端带游标增量拉取，与 SSE 同粒度。"""
+
+    @staticmethod
+    def _job():
+        from webui.jobs import Job
+        return Job("job-replay", "detect", "颜色检测")
+
+    def test_publish_keeps_seq_and_latest_progress(self):
+        job = self._job()
+        job.publish("started", {})
+        job.publish("progress", {"stage": "coarse", "progress": 0.1, "message": "a"})
+        job.publish("progress", {"stage": "coarse", "progress": 0.2, "message": "b"})
+        job.publish("progress", {"stage": "fine", "progress": 0.6, "message": "c"})
+        assert [i["seq"] for i in job.recent] == [1, 2, 3, 4]
+        assert job.last_progress == {"stage": "fine", "progress": 0.6, "message": "c"}
+
+    def test_events_since_returns_delta(self):
+        job = self._job()
+        for i in range(5):
+            job.publish("progress", {"progress": i / 10})
+        assert [i["seq"] for i in job.events_since(0)] == [1, 2, 3, 4, 5]
+        assert [i["seq"] for i in job.events_since(3)] == [4, 5]
+        assert job.events_since(99) == []
+
+    def test_recent_buffer_bounded(self):
+        job = self._job()
+        for i in range(2500):  # 超过 maxlen=2000：最早的被挤出
+            job.publish("progress", {"progress": i / 2500})
+            job.drain_queue()  # 及时排空，避免 SSE 队列打满导致 put 阻塞等待
+        assert len(job.recent) == 2000
+        assert job.recent[0]["seq"] == 501
+        assert job._ev_seq == 2500
+        # 游标早于被挤出的区间：只返回现存部分（前端按 seq 前进，不受影响）
+        assert job.events_since(0)[0]["seq"] == 501
+
+    def test_job_status_replay_api(self, client, monkeypatch):
+        job = self._job()
+        job.publish("progress", {"stage": "coarse", "progress": 0.1, "message": "a"})
+        job.publish("progress", {"stage": "fine", "progress": 0.5, "message": "b"})
+        monkeypatch.setitem(webui_app.manager._jobs, "job-replay", job)
+        d = client.get("/api/jobs/job-replay?since=1").get_json()
+        assert d["ok"] and d["status"] == "running"
+        assert [e["seq"] for e in d["events"]] == [2]
+        assert d["events"][0]["data"]["stage"] == "fine"
+        # 不带 since 不附事件（SSE 断线兜底等旧调用方不受影响）
+        assert "events" not in client.get("/api/jobs/job-replay").get_json()

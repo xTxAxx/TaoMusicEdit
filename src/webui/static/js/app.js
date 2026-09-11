@@ -1079,26 +1079,30 @@ function applyJobStatus(ctx, d) {
 }
 
 // 重试任务进度轮询：不再为每个重试开一条 SSE 长连接（并发重试会把浏览器
-// 同主机连接配额占满，后续任何请求都会被搁置），改用 1s 轮询任务状态，
-// 终态复用批量事件的处理器落任务行。
+// 同主机连接配额占满，后续任何请求都会被搁置），改用 1s 增量轮询——带游标
+// 拉取任务事件回放缓冲，逐事件喂入与 SSE 相同的渲染管线，粒度与首跑一致。
 function pollRetryJob(ctx) {
   let errors = 0;
   const tick = async () => {
     if (!state.jobTasks.has(ctx.jobId)) return;  // 已被外部清理
     try {
-      const d = await fetchJsonTimeout("/api/jobs/" + ctx.jobId, {}, 5000);
+      const since = ctx._pollSeq || 0;
+      const d = await fetchJsonTimeout("/api/jobs/" + ctx.jobId + "?since=" + since, {}, 5000);
       if (!state.jobTasks.has(ctx.jobId)) return;
       errors = 0;
+      // 逐事件回放：与 SSE 同粒度，进度条与日志去重规则看到完整事件序列，
+      // 表现和首跑一致（而不是每秒只采样最新快照）
+      (d.events || []).forEach((ev) => {
+        if (ev.type === "progress") handleJobProgress(ctx, ev.data);
+        ctx._pollSeq = ev.seq;
+      });
       if (applyJobStatus(ctx, d)) {
         finishRetryJob(ctx);
         return;
       }
-      // 运行中：有进度快照就走与首跑相同的渲染管线（进度条 + 日志），
-      // 尚无进度事件时显示已用时
+      // 尚无任何进度事件时显示已用时
       const t = ctx.tasks[0];
-      if (d.progress) {
-        handleJobProgress(ctx, d.progress);
-      } else {
+      if ((d.events || []).length === 0 && !d.progress) {
         t._pollSec = (t._pollSec || 0) + 1;
         taskEls(t).detail.textContent =
           (ctx.kind === "detect" ? "检测中…" : "裁剪中…") + "（" + t._pollSec + "s）";

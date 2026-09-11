@@ -850,6 +850,9 @@ def run_detect(job, payload: dict) -> dict:
             "stage": stage, "progress": progress, "message": message,
         })
 
+    job.publish("progress", {
+        "stage": "pending", "progress": 0.0, "message": "准备检测",
+    })  # 与批量路径的逐文件准备事件对齐，任务行日志粒度一致
     result = _detect_one(path, overrides, progress_cb=cb)
     result["path"] = path
     store_detect_result(result, path)  # 写入持久化缓存，刷新 / 重启后可复用
@@ -1415,14 +1418,18 @@ def job_events(jid):
 
 @app.route("/api/jobs/<jid>")
 def job_status(jid):
+    since = request.args.get("since", type=int)
     job = manager.get(jid)
     if job is None:
         return jsonify({"ok": False, "message": "任务不存在"}), 404
-    return jsonify({
+    payload = {
         "ok": True, "id": job.id, "kind": job.kind, "name": job.name,
         "status": job.status, "result": job.result, "error": job.error,
         "progress": job.last_progress,
-    })
+    }
+    if since is not None:
+        payload["events"] = job.events_since(since)
+    return jsonify(payload)
 
 
 @app.route("/api/jobs/<jid>/cancel", methods=["POST"])

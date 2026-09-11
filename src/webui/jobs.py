@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import collections
 import itertools
 import json
 import queue
@@ -45,18 +46,27 @@ class Job:
         self.error: Optional[str] = None
         #: 最新一次 progress 事件快照（供前端轮询兜底；SSE 消费者不受影响）
         self.last_progress: Optional[dict] = None
+        #: 事件回放缓冲（有界）：轮询端带游标拉增量，获得与 SSE 同粒度的事件流
+        self._ev_seq = 0
+        self.recent: "collections.deque" = collections.deque(maxlen=2000)
         #: 实时事件队列（供 SSE 消费）
         self._queue: "queue.Queue" = queue.Queue(maxsize=2000)
 
     def publish(self, event: str, data: Any) -> None:
-        """推入一条实时事件，供 SSE 消费者获取。"""
+        """推入一条实时事件，供 SSE 消费者获取，并留档供轮询增量回放。"""
         if event == "progress":
             self.last_progress = data  # 轮询端只取最新值，无需保留历史
-        payload = {"type": event, "data": data, "ts": time.time()}
+        self._ev_seq += 1
+        item = {"seq": self._ev_seq, "type": event, "data": data, "ts": time.time()}
+        self.recent.append(item)
         try:
-            self._queue.put(payload, timeout=1)
+            self._queue.put(item, timeout=1)
         except queue.Full:
             pass
+
+    def events_since(self, seq: int) -> list:
+        """返回 seq 之后的事件列表（轮询增量拉取）。"""
+        return [item for item in self.recent if item["seq"] > seq]
 
     def drain_queue(self):
         """非阻塞排空实时队列（供 SSE 连接时先消费既有事件）。"""
