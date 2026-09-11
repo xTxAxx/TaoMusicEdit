@@ -679,6 +679,9 @@ function updateColumnTotal(col) {
   const label = document.getElementById(col === "detect" ? "detectTotalLabel" : "trimTotalLabel");
   const empty = document.getElementById(col === "detect" ? "detectTaskEmpty" : "trimTaskEmpty");
   const box = fill ? fill.closest(".task-total") : null;
+  // 「全部中断」可用性跟随本列是否存在等待中 / 运行中任务
+  const stopAll = box ? box.querySelector("[data-interrupt-all]") : null;
+  if (stopAll) stopAll.disabled = !arr.some((t) => t.status === "pending" || t.status === "running");
   if (empty) empty.hidden = arr.length > 0;
   if (!arr.length) {
     // 无任务：整体隐藏总进度区域，避免空轨道像"坏了"
@@ -917,6 +920,21 @@ function interruptTask(t) {
     setStatus(colName + "任务已请求中断");
   }
   updateTaskActions(t);
+}
+
+// 「全部中断」：取消本列当前运行中的全部任务（批量与单文件），
+// 逐个 job 发整单取消，终态由各自 SSE 的 cancelled 事件统一落到任务行
+function interruptColumnAll(col) {
+  const ids = [];
+  ["detect", "trim", "batch"].forEach((k) => {
+    const jid = state.jobs[k];
+    if (!jid) return;
+    const ctx = state.jobTasks.get(jid);
+    if (ctx && ctx.col === col) ids.push(jid);
+  });
+  if (!ids.length) return;
+  ids.forEach((jid) => fetch("/api/jobs/" + jid + "/cancel", { method: "POST" }).catch(() => {}));
+  setStatus("已请求中断本列全部任务");
 }
 
 function retryTask(t) {
@@ -1421,6 +1439,8 @@ function wireUI() {
     const panel = document.getElementById(col === "detect" ? "panelTaskDetect" : "panelTaskTrim");
     const clear = panel && panel.querySelector("[data-clear]");
     if (clear) clear.addEventListener("click", () => clearFinishedTasks(col));
+    const stopAll = panel && panel.querySelector("[data-interrupt-all]");
+    if (stopAll) stopAll.addEventListener("click", () => interruptColumnAll(col));
   });
 
   // 批处理：选择 + 批量执行
