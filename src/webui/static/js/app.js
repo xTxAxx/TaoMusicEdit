@@ -989,7 +989,7 @@ async function runBatchDetect() {
   const v = validateDetect(state);
   if (v.errors.length) return;
   setStatus("批量检测中…");
-  const tasks = files.map((f, i) => addTask("detect", f, { path: f, params: v.params, index: i + 1 }));
+  const tasks = files.map((f, i) => addTask("detect", f, { path: f, params: v.params }, { index: i + 1 }));
   try {
     const res = await fetch("/api/batch/detect", {
       method: "POST",
@@ -1037,7 +1037,8 @@ async function runBatchTrim() {
   const tasks = files.map((f, i) => {
     const r = state.batchDetectResults[f];
     return addTask("trim", f,
-      { path: f, output_dir: state.outputDir, params, frame: (r && r.detected) ? r.frame + 1 : null, index: i + 1 });
+      { path: f, output_dir: state.outputDir, params, frame: (r && r.detected) ? r.frame + 1 : null },
+      { index: i + 1 });
   });
   try {
     const res = await fetch("/api/batch/trim", {
