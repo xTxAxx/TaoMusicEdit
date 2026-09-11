@@ -749,6 +749,14 @@ function refreshTaskVisibility(t) {
   taskEls(t).row.classList.toggle("hidden", !keep);
 }
 
+// 状态迁移后重投影可见性：行按当前筛选条件显隐，批量组头随组内任务收放。
+// 由 setTaskRunning / setTaskProgress / finalizeTask / startRetry 在状态变化时调用，
+// 保证「失败」里重试的任务立刻移入「运行中」、跑完后再按结果归位。
+function refreshTaskFilterView(t) {
+  refreshTaskVisibility(t);
+  refreshGroupVisibility(t.col);
+}
+
 // ---------------- 批量折叠组 ----------------
 // 批量任务结束后折叠为一行摘要（可展开查看逐文件明细）。
 // 摘要是实时投影：重算自「仍存在于列中的组内任务」，重试 / 删行后自动跟进。
@@ -857,15 +865,19 @@ function setTaskRunning(t, label) {
   if (label) els.detail.textContent = label;
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  refreshTaskFilterView(t);
 }
 
 function setTaskProgress(t, pct, summary) {
+  const wasRunning = t.status === "running";
   if (t.status !== "success" && t.status !== "fail" && t.status !== "cancelled") t.status = "running";
   t.progress = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   taskEls(t).fill.style.width = t.progress + "%";
   if (summary) taskEls(t).detail.textContent = summary;
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  // 兜底：任务未经 setTaskRunning 直接收到进度时（pending → running）也要落入「运行中」
+  if (!wasRunning) refreshTaskFilterView(t);
 }
 
 function finalizeTask(t, status, lines, result, error) {
@@ -884,6 +896,7 @@ function finalizeTask(t, status, lines, result, error) {
   (lines || []).forEach((l) => taskLog(t, l));
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  refreshTaskFilterView(t);
   const g = t.groupKey && state.groups.get(t.groupKey);
   if (g) refreshGroupSummary(g);
 }
@@ -994,6 +1007,7 @@ function startRetry(t) {
   els.log.classList.add("collapsed");
   updateTaskActions(t);
   updateColumnTotal(t.col);
+  refreshTaskFilterView(t);  // 重试使任务离开「失败」视图，等待 / 运行中归位
   const g = t.groupKey && state.groups.get(t.groupKey);
   if (g) refreshGroupSummary(g);  // 重试使任务回到未完成态，摘要立即跟进
 }
