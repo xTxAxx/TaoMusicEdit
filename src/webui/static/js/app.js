@@ -872,7 +872,8 @@ function updateTaskActions(t) {
   const done = t.status === "success" || t.status === "fail" || t.status === "cancelled";
   els.interrupt.disabled = !running;
   els.retry.disabled = !(done && !!t.payload);
-  els.del.disabled = false;
+  // 删除仅移除条目、不取消后端任务：运行中禁用，避免任务失控后无从中断
+  els.del.disabled = !done;
 }
 
 // 单个任务结果终态 -> { status, lines }
