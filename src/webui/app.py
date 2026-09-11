@@ -1421,6 +1421,7 @@ def job_status(jid):
     return jsonify({
         "ok": True, "id": job.id, "kind": job.kind, "name": job.name,
         "status": job.status, "result": job.result, "error": job.error,
+        "progress": job.last_progress,
     })
 
 

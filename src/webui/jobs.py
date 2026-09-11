@@ -43,11 +43,15 @@ class Job:
         self.file_cancel: set = set()  # 批量任务中已请求中断的索引集合（1 基）
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
+        #: 最新一次 progress 事件快照（供前端轮询兜底；SSE 消费者不受影响）
+        self.last_progress: Optional[dict] = None
         #: 实时事件队列（供 SSE 消费）
         self._queue: "queue.Queue" = queue.Queue(maxsize=2000)
 
     def publish(self, event: str, data: Any) -> None:
         """推入一条实时事件，供 SSE 消费者获取。"""
+        if event == "progress":
+            self.last_progress = data  # 轮询端只取最新值，无需保留历史
         payload = {"type": event, "data": data, "ts": time.time()}
         try:
             self._queue.put(payload, timeout=1)

@@ -1097,10 +1097,15 @@ function pollRetryJob(ctx) {
         finishRetryJob(ctx);
         return;
       }
-      // 运行中：SSE 缺席无法拿到实时百分比，显示已用时
-      t._pollSec = (t._pollSec || 0) + 1;
-      taskEls(t).detail.textContent =
-        (ctx.kind === "detect" ? "检测中…" : "裁剪中…") + "（" + t._pollSec + "s）";
+      // 运行中：有进度快照就走与首跑相同的渲染管线（进度条 + 日志），
+      // 尚无进度事件时显示已用时
+      if (d.progress) {
+        handleJobProgress(ctx, d.progress);
+      } else {
+        t._pollSec = (t._pollSec || 0) + 1;
+        taskEls(t).detail.textContent =
+          (ctx.kind === "detect" ? "检测中…" : "裁剪中…") + "（" + t._pollSec + "s）";
+      }
     } catch (e) {
       errors++;
       if (errors >= 3) {
