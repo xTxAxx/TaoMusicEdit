@@ -59,19 +59,16 @@
         <div class="param-row" data-key="cache_enabled">
           <label class="param-label" for="param-cache_enabled">缓存开关</label>
           <div class="param-ctl">
-            <select id="param-cache_enabled">
-              <option value="1">启用</option>
-              <option value="0">停用</option>
-            </select>
+            <input type="checkbox" id="param-cache_enabled" class="bool-input">
           </div>
-          <div class="param-desc">启用后检测结果持久化保存，刷新页面 / 重启服务后自动匹配，无需重新检测</div>
+          <div class="param-desc">检测结果的持久化保存</div>
         </div>
         <div class="param-row" data-key="cache_limit">
           <label class="param-label" for="param-cache_limit">条目上限</label>
           <div class="param-ctl">
             <input type="number" id="param-cache_limit" min="0" step="10" placeholder="0">
           </div>
-          <div class="param-desc">最多保留的检测结果条数，超出自动淘汰最旧的；0 = 不限制</div>
+          <div class="param-desc">缓存保留的条数上限</div>
         </div>
         <div class="cache-stats muted-text" id="cacheStats"></div>
         <div class="cache-actions">
@@ -95,7 +92,7 @@
         <div class="param-ctl">
           <input type="number" id="param-batch_workers" min="0" max="16" step="1" placeholder="0">
         </div>
-        <div class="param-desc">批量检测 / 裁剪同时处理的任务数；0 = 自动按 CPU 核数</div>
+        <div class="param-desc">批量任务同时执行的个数</div>
       </div>
     </section>
 
@@ -243,8 +240,8 @@
   </div>
 </div>
 
-<script src="/static/js/params.js?v=11"></script>
+<script src="/static/js/params.js?v=12"></script>
 <script src="/static/js/player.js?v=12"></script>
-<script src="/static/js/app.js?v=40"></script>
+<script src="/static/js/app.js?v=41"></script>
 </body>
 </html>

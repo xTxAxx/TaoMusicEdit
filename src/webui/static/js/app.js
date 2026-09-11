@@ -1,4 +1,4 @@
-// app.js —— 主应用逻辑：工作区 / 输出区 / 文件树 / Detect·Trim 任务编排 / SSE 进度 / 反馈
+// app.js —— 主应用逻辑：工作区 / 输出区 / 文件树 / 检测·裁剪任务编排 / SSE 进度 / 反馈
 "use strict";
 
 const state = {
@@ -9,7 +9,7 @@ const state = {
   jobs: { detect: null, trim: null, batch: null },  // 正在运行的任务 job_id
   sel: new Set(),          // 批处理选择的视频路径集合
   selAnchor: null,         // shift 区选的锚点路径
-  batchDetectResults: {},  // 批量 Detect 结果缓存 { path: result }
+  batchDetectResults: {},  // 批量检测结果缓存 { path: result }
   batchRuns: new Set(),    // 本会话实际执行过检测的文件路径（区分「缓存匹配」与「真实运行」）
   tasks: { detect: [], trim: [] },  // 任务中心：颜色检测 / 视频裁剪 两列的任务
   jobTasks: new Map(),     // job_id -> { kind, col, batch, tasks: [], jobId }：SSE 结果定位到任务
@@ -275,7 +275,7 @@ async function hydrateDetectCache() {
 // 刷新缓存统计文本（条数由后端返回，避免本地与持久化数据不一致）
 function renderCacheStats(count) {
   const el = document.getElementById("cacheStats");
-  if (el) el.textContent = "当前缓存：" + count + " 条";
+  if (el) el.textContent = "缓存条目：" + count + " 条";
 }
 
 // 从后端拉取最新配置并刷新统计（no-store + 时间戳双保险，避免浏览器缓存旧计数）
@@ -304,19 +304,19 @@ async function saveCacheConfig(patch) {
 
 // 绑定缓存设置控件；saved 为 /api/settings 返回值（含 detect_cache 组）
 function initCacheSettingsUI(saved) {
-  const selEnabled = document.getElementById("param-cache_enabled");
+  const chkEnabled = document.getElementById("param-cache_enabled");
   const inpLimit = document.getElementById("param-cache_limit");
-  if (!selEnabled || !inpLimit) return;
+  if (!chkEnabled || !inpLimit) return;
 
   // 用保存的设置初始化控件（无保存值时用默认：启用 / 不限）
   const dc = (saved && saved.detect_cache) || {};
-  selEnabled.value = dc.enabled === false ? "0" : "1";
+  chkEnabled.checked = dc.enabled !== false;
   inpLimit.value = String(dc.limit != null ? dc.limit : 0);
   void refreshCacheConfig();
 
   let limitTimer = null;
-  selEnabled.addEventListener("change", () => {
-    saveCacheConfig({ enabled: selEnabled.value === "1" });
+  chkEnabled.addEventListener("change", () => {
+    saveCacheConfig({ enabled: chkEnabled.checked });
   });
   inpLimit.addEventListener("change", () => {
     clearTimeout(limitTimer);
@@ -366,7 +366,7 @@ function initCacheSettingsUI(saved) {
 }
 
 // ---------------- 批处理设置（并发数） ----------------
-// 并发数 0 = 自动按 CPU 核数；改动即随参数面板一起持久化到 settings.json
+// 并发数 0 表示自动（按 CPU 核数）；改动即随参数面板一起持久化到 settings.json
 function initBatchWorkersUI(saved) {
   const inp = document.getElementById("param-batch_workers");
   if (!inp) return;
@@ -416,7 +416,7 @@ function renderOutputInfo(data) {
       '<span class="bad">✗ 不可写</span> <span class="muted-text">' +
       esc(data.message || "该目录不可写") + "</span>";
   } else {
-    el.innerHTML = '<span class="ok">✓ 可写</span> · 检测/裁剪结果将保存到该目录';
+    el.innerHTML = '<span class="ok">✓ 可写</span> · 检测与裁剪结果将保存到该目录';
   }
 }
 
