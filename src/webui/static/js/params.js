@@ -183,6 +183,8 @@ function buildParamRow(p, values) {
   desc.className = "param-desc";
   desc.textContent = p.desc || "";
   row.appendChild(desc);
+  // 悬停详情气泡（纯 CSS，见 style.css [data-tip]）；行内短 desc 始终保留作触屏降级
+  if (p.tip) row.dataset.tip = p.tip;
   return row;
 }
 
