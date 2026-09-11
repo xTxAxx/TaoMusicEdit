@@ -118,7 +118,7 @@ body {
 .wsbar .card { display: flex; flex-direction: column; min-height: 0; }
 .wsbar .ws-card { flex: 1; }   /* 文件选择卡片占满右栏剩余高度，文件树内部滚动 */
 
-/* 路径选择卡片内的小节标签 */
+/* 路径与输出卡片内的小节标签 */
 .path-label {
   font-size: 11.5px; color: var(--text-dim);
   margin: 10px 0 4px; letter-spacing: 0.3px;
@@ -491,8 +491,45 @@ body {
   text-overflow: ellipsis; white-space: nowrap; color: var(--text);
 }
 .task-group-summary { flex-shrink: 0; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
-/* 侧边栏内的参数面板改为纵向堆叠（窄列下更清晰） */
-.sidebar .params { grid-template-columns: 1fr; gap: 8px; }
+/* 侧边栏内的参数面板改为纵向堆叠（窄列下更清晰），子组之间留缝 */
+.sidebar .params { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------------- 参数子分组（卡片内二级层次，高级组默认折叠） ---------------- */
+/* 折叠只隐藏 .param-group-body，不销毁 DOM：折叠态下仍可通过 param-<key> 定位行 */
+.sidebar .param-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+/* 合并卡片（批处理与缓存）内静态子组之间的间距 */
+.card > .param-group + .param-group { margin-top: 8px; }
+.param-group-head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 6px 9px;
+  background: var(--card-2);
+  border: none; text-align: left; color: var(--text);
+  font-family: inherit;
+}
+button.param-group-head { cursor: pointer; }
+button.param-group-head:hover { background: #2b3650; }
+.param-group-head.static { cursor: default; }
+.param-group-title { font-size: 12px; font-weight: 600; }
+.param-group-count { font-size: 11px; color: var(--text-dim); }
+.param-group-count::before { content: "（"; }
+.param-group-count::after { content: "）"; }
+.param-group-tag {
+  font-size: 10.5px; color: var(--text-dim);
+  border: 1px dashed var(--border); border-radius: 7px;
+  padding: 0 6px; line-height: 15px;
+}
+.param-group-caret {
+  margin-left: auto; font-size: 10px; color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.param-group .param-group-caret { transform: rotate(90deg); }       /* 展开态 */
+.param-group.folded .param-group-caret { transform: rotate(0deg); } /* 折叠态 */
+.param-group-body { display: flex; flex-direction: column; }
+.param-group.folded .param-group-body { display: none; }
 .sidebar .param-row { grid-template-columns: 1fr; row-gap: 3px; padding: 6px 8px; }
 .param-row {
   display: grid;
@@ -529,13 +566,12 @@ input[type="number"] {
 .param-error { grid-column: 1 / -1; font-size: 11.5px; color: var(--bad); }
 .param-tip { grid-column: 1 / -1; font-size: 11.5px; color: var(--ok); }
 
-/* ---------------- 检测缓存设置 ---------------- */
-.cache-panel { margin-top: 2px; }
-.cache-stats { font-size: 11.5px; }
-.cache-actions { display: flex; gap: 8px; margin-top: 6px; }
+/* ---------------- 检测缓存设置（批处理与缓存卡片） ---------------- */
+.cache-stats { font-size: 11.5px; margin: 2px 8px 0; }
+.cache-actions { display: flex; gap: 8px; margin: 6px 8px 2px; }
 
-/* 批处理设置：跳过已缓存 */
-.skip-cached-row { display: flex; margin-top: 2px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
+/* 批处理子组：跳过已缓存项 */
+.skip-cached-row { display: flex; margin: 2px 8px; font-size: 12.5px; color: var(--text-dim); }
 
 /* ---------------- 进度 ---------------- */
 .progress-fill {

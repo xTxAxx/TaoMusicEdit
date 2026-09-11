@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TaoMusicEdit · 视频检测与裁剪工作台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=28">
+<link rel="stylesheet" href="/static/css/style.css?v=29">
 </head>
 <body>
 
@@ -27,7 +27,7 @@
   <aside class="sidebar" id="sidebar">
 
     <section class="card">
-      <div class="card-head"><h2>路径选择</h2></div>
+      <div class="card-head"><h2>路径与输出</h2></div>
       <div class="path-label">工作目录</div>
       <div class="path-row">
         <input type="text" id="workspacePath" placeholder="输入工作目录路径" autocomplete="off" spellcheck="false">
@@ -54,46 +54,58 @@
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>检测结果缓存</h2></div>
-      <div class="cache-panel">
-        <div class="param-row" data-key="cache_enabled">
-          <label class="param-label" for="param-cache_enabled">缓存开关</label>
-          <div class="param-ctl">
-            <input type="checkbox" id="param-cache_enabled" class="bool-input">
-          </div>
-          <div class="param-desc">检测结果的持久化保存</div>
-        </div>
-        <div class="param-row" data-key="cache_limit">
-          <label class="param-label" for="param-cache_limit">条目上限</label>
-          <div class="param-ctl">
-            <input type="number" id="param-cache_limit" min="0" step="10" placeholder="0">
-          </div>
-          <div class="param-desc">缓存保留的条数上限</div>
-        </div>
-        <div class="cache-stats muted-text" id="cacheStats"></div>
-        <div class="cache-actions">
-          <button class="btn small" id="btnRefreshCacheStats"
-                  title="重新读取当前缓存条目数量">刷新统计</button>
-          <button class="btn small" id="btnPruneCache"
-                  title="删除源文件已删除 / 已修改或结果损坏的失效条目">清理失效条目</button>
-          <button class="btn small danger" id="btnClearCache"
-                  title="删除全部检测缓存条目">清空缓存</button>
-        </div>
-      </div>
-    </section>
+      <div class="card-head"><h2>批处理与缓存</h2></div>
 
-    <section class="card">
-      <div class="card-head"><h2>批处理</h2></div>
-      <label class="chk skip-cached-row" title="勾选后，批量检测将自动跳过缓存库中已有有效结果的视频">
-        <input type="checkbox" id="skipCached"> 跳过已缓存的检测
-      </label>
-      <div class="param-row" data-key="batch_workers">
-        <label class="param-label" for="param-batch_workers">并发数</label>
-        <div class="param-ctl">
-          <input type="number" id="param-batch_workers" min="0" max="16" step="1" placeholder="0">
+      <section class="param-group">
+        <div class="param-group-head static">
+          <span class="param-group-title">批处理</span>
+          <span class="param-group-count">2</span>
         </div>
-        <div class="param-desc">批量任务同时执行的个数</div>
-      </div>
+        <div class="param-group-body">
+          <div class="param-row" data-key="batch_workers">
+            <label class="param-label" for="param-batch_workers">并发数</label>
+            <div class="param-ctl">
+              <input type="number" id="param-batch_workers" min="0" max="16" step="1" placeholder="0">
+            </div>
+            <div class="param-desc">批量任务同时执行的个数</div>
+          </div>
+          <label class="chk skip-cached-row" title="勾选后，批量检测将自动跳过缓存库中已有有效结果的视频">
+            <input type="checkbox" id="skipCached"> 跳过已缓存项
+          </label>
+        </div>
+      </section>
+
+      <section class="param-group">
+        <div class="param-group-head static">
+          <span class="param-group-title">检测结果缓存</span>
+          <span class="param-group-count">2</span>
+        </div>
+        <div class="param-group-body">
+          <div class="param-row" data-key="cache_enabled">
+            <label class="param-label" for="param-cache_enabled">缓存开关</label>
+            <div class="param-ctl">
+              <input type="checkbox" id="param-cache_enabled" class="bool-input">
+            </div>
+            <div class="param-desc">检测结果的持久化保存</div>
+          </div>
+          <div class="param-row" data-key="cache_limit">
+            <label class="param-label" for="param-cache_limit">条目上限</label>
+            <div class="param-ctl">
+              <input type="number" id="param-cache_limit" min="0" step="10" placeholder="0">
+            </div>
+            <div class="param-desc">缓存保留的条数上限</div>
+          </div>
+          <div class="cache-stats muted-text" id="cacheStats"></div>
+          <div class="cache-actions">
+            <button class="btn small" id="btnRefreshCacheStats"
+                    title="重新读取当前缓存条目数量">刷新统计</button>
+            <button class="btn small" id="btnPruneCache"
+                    title="删除源文件已删除 / 已修改或结果损坏的失效条目">清理失效条目</button>
+            <button class="btn small danger" id="btnClearCache"
+                    title="删除全部检测缓存条目">清空缓存</button>
+          </div>
+        </div>
+      </section>
     </section>
 
     <div class="sidebar-foot">
@@ -240,7 +252,7 @@
   </div>
 </div>
 
-<script src="/static/js/params.js?v=12"></script>
+<script src="/static/js/params.js?v=13"></script>
 <script src="/static/js/player.js?v=12"></script>
 <script src="/static/js/app.js?v=41"></script>
 </body>
