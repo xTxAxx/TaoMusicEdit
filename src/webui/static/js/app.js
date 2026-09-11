@@ -937,7 +937,7 @@ function interruptTask(t) {
   const colName = t.col === "detect" ? "检测" : "裁剪";
   if (ctx && ctx.batch && t.index) {
     // 批量任务：单文件取消，不影响同批其他文件
-    fetch("/api/jobs/" + t.jobId + "/cancel-file", {
+    fetchJsonTimeout("/api/jobs/" + t.jobId + "/cancel-file", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index: t.index }),
@@ -945,7 +945,7 @@ function interruptTask(t) {
     finalizeTask(t, "cancelled", ["已请求中断该文件任务"]);
     setStatus("已请求中断「" + t.name + "」");
   } else {
-    fetch("/api/jobs/" + t.jobId + "/cancel", { method: "POST" }).catch(() => {});
+    fetchJsonTimeout("/api/jobs/" + t.jobId + "/cancel", { method: "POST" }).catch(() => {});
     setStatus(colName + "任务已请求中断");
   }
   updateTaskActions(t);
@@ -969,7 +969,8 @@ function interruptColumnAll(col) {
   const queuedCount = queue.length;
   while (queue.length) finalizeTask(queue.shift(), "cancelled", ["已取消（尚未开始）"]);
   if (!ids.length && !queuedCount) return;
-  ids.forEach((jid) => fetch("/api/jobs/" + jid + "/cancel", { method: "POST" }).catch(() => {}));
+  ids.forEach((jid) =>
+    fetchJsonTimeout("/api/jobs/" + jid + "/cancel", { method: "POST" }).catch(() => {}));
   setStatus("已请求中断本列全部任务");
 }
 
@@ -1038,11 +1039,78 @@ function pumpRetryQueue(col) {
   }
 }
 
-// 重试失败落终态并让队列继续推进（成功路径的推进由 openSSE 的 stop() 负责）
+// 重试失败落终态并让队列继续推进（成功路径的推进由 finishRetryJob 负责）
 function finishRetryFailure(t, msg) {
   state.retryRunning[t.col].delete(t);
   finalizeTask(t, "fail", [msg]);
   pumpRetryQueue(t.col);
+}
+
+// 重试任务结束（终态确认或清理）：释放并发名额并推进本列队列。
+// 与 openSSE 的 stop() 等价，但重试走轮询、无 SSE 需关闭。
+function finishRetryJob(ctx) {
+  clearTimeout(ctx._pollTimer);
+  const t = ctx.tasks[0];
+  state.retryRunning[ctx.col].delete(t);
+  state.jobTasks.delete(ctx.jobId);
+  updateActions();
+  pumpRetryQueue(ctx.col);
+}
+
+// 带超时的 JSON 请求：浏览器同主机连接数有限（SSE 长连接会挤占），
+// 网络栈偶发把请求搁置且永不唤醒——超时兜底把卡死转成可见失败。
+async function fetchJsonTimeout(url, opts, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms || 8000);
+  try {
+    const res = await fetch(url, Object.assign({ cache: "no-store" }, opts, { signal: ctl.signal }));
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 重试任务进度轮询：不再为每个重试开一条 SSE 长连接（并发重试会把浏览器
+// 同主机连接配额占满，后续任何请求都会被搁置），改用 1s 轮询任务状态，
+// 终态复用批量事件的处理器落任务行。
+function pollRetryJob(ctx) {
+  let errors = 0;
+  const tick = async () => {
+    if (!state.jobTasks.has(ctx.jobId)) return;  // 已被外部清理
+    try {
+      const d = await fetchJsonTimeout("/api/jobs/" + ctx.jobId, {}, 5000);
+      if (!state.jobTasks.has(ctx.jobId)) return;
+      errors = 0;
+      const t = ctx.tasks[0];
+      if (d.status === "done") {
+        try { handleJobDone(ctx, d.result || {}); } catch (e) { /* 终态已落，副作用失败不影响任务 */ }
+        finishRetryJob(ctx);
+        return;
+      }
+      if (d.status === "error") {
+        handleJobError(ctx, { message: d.error || "任务执行失败" });
+        finishRetryJob(ctx);
+        return;
+      }
+      if (d.status === "cancelled") {
+        handleJobCancelled(ctx);
+        finishRetryJob(ctx);
+        return;
+      }
+      // 运行中：SSE 缺席无法拿到实时百分比，显示已用时
+      t._pollSec = (t._pollSec || 0) + 1;
+      taskEls(t).detail.textContent =
+        (ctx.kind === "detect" ? "检测中…" : "裁剪中…") + "（" + t._pollSec + "s）";
+    } catch (e) {
+      errors++;
+      if (errors >= 3) {
+        finishRetryFailure(ctx.tasks[0], "任务状态查询失败：" + e.message);
+        return;
+      }
+    }
+    ctx._pollTimer = setTimeout(tick, 1000);
+  };
+  tick();
 }
 
 async function launchRetryJob(t) {
@@ -1056,24 +1124,27 @@ async function launchRetryJob(t) {
     body = { path: t.path, output_dir: t.payload.output_dir, params };
   }
   try {
-    const res = await fetch(isDetect ? "/api/detect" : "/api/trim", {
+    const data = await fetchJsonTimeout(isDetect ? "/api/detect" : "/api/trim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await res.json();
     if (!data.ok) {
       finishRetryFailure(t, "启动" + (isDetect ? "检测" : "裁剪") + "失败：" + (data.message || ""));
       return;
     }
     t.jobId = data.job_id;
-    state.jobTasks.set(data.job_id, {
+    t._pollSec = 0;
+    const ctx = {
       kind: isDetect ? "detect" : "trim", col: t.col, batch: false, retry: true, tasks: [t],
-    });
+      jobId: data.job_id,
+    };
+    state.jobTasks.set(data.job_id, ctx);
     setTaskRunning(t, "启动中…");
-    openSSE(data.job_id, isDetect ? "detect" : "trim");
+    pollRetryJob(ctx);
   } catch (e) {
-    finishRetryFailure(t, "网络错误：" + e.message);
+    const timedOut = e && e.name === "AbortError";
+    finishRetryFailure(t, timedOut ? "启动请求超时（浏览器连接受限），请重试" : "网络错误：" + e.message);
   }
 }
 
@@ -1203,19 +1274,16 @@ function openSSE(jobId, kind) {
     handleJobFileDone(ctx, d);
   });
   es.addEventListener("done", (ev) => {
-    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
-    handleJobDone(ctx, d);
-    stop();
+    let d; try { d = JSON.parse(ev.data); } catch (e) { d = {}; }
+    try { handleJobDone(ctx, d); } finally { stop(); }  // stop 必须执行，否则名额/槽位泄漏
   });
   es.addEventListener("cancelled", () => {
-    handleJobCancelled(ctx);
-    stop();
+    try { handleJobCancelled(ctx); } finally { stop(); }
   });
   es.addEventListener("error", (ev) => {
     if (ev.data) {
       let d; try { d = JSON.parse(ev.data); } catch (e) { d = {}; }
-      handleJobError(ctx, d);
-      stop();
+      try { handleJobError(ctx, d); } finally { stop(); }
       return;
     }
     pollSettled();
