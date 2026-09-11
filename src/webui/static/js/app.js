@@ -6,7 +6,9 @@ const state = {
   outputDir: "",
   currentVideo: null,      // 当前选中视频绝对路径
   video: null,             // 当前视频元信息（duration/fps/nb_frames），供参数范围校验
-  jobs: { detect: null, trim: null, batch: null },  // 正在运行的任务 job_id
+  jobs: { detect: null, trim: null, batch: null },  // 正在运行的主流程任务 job_id（单文件检测/裁剪、批量）
+  retryQueues: { detect: [], trim: [] },  // 重试排队：每列待派发的任务（等待中徽章）
+  retryRunning: { detect: new Set(), trim: new Set() },  // 列 -> 运行中的重试任务集合（并发上限用）
   sel: new Set(),          // 批处理选择的视频路径集合
   selAnchor: null,         // shift 区选的锚点路径
   batchDetectResults: {},  // 批量检测结果缓存 { path: result }
@@ -888,7 +890,8 @@ function finalizeTask(t, status, lines, result, error) {
 
 function updateTaskActions(t) {
   const els = taskEls(t);
-  const running = (t.status === "running" || t.status === "pending") && !!t.jobId;
+  const queued = !!(state.retryQueues[t.col] && state.retryQueues[t.col].includes(t));
+  const running = ((t.status === "running" || t.status === "pending") && !!t.jobId) || queued;
   const done = t.status === "success" || t.status === "fail" || t.status === "cancelled";
   els.interrupt.disabled = !running;
   els.retry.disabled = !(done && !!t.payload);
@@ -920,6 +923,15 @@ function finalizeItemResult(r, col) {
 
 // ---------------- 中断 / 重试 ----------------
 function interruptTask(t) {
+  const queue = state.retryQueues[t.col];
+  const qi = queue ? queue.indexOf(t) : -1;
+  if (qi !== -1) {
+    // 排队未启动：出队即取消，无需后端参与
+    queue.splice(qi, 1);
+    finalizeTask(t, "cancelled", ["已取消（尚未开始）"]);
+    setStatus("已取消排队任务「" + t.name + "」");
+    return;
+  }
   if (!t.jobId) return;
   const ctx = state.jobTasks.get(t.jobId);
   const colName = t.col === "detect" ? "检测" : "裁剪";
@@ -939,8 +951,9 @@ function interruptTask(t) {
   updateTaskActions(t);
 }
 
-// 「全部中断」：取消本列当前运行中的全部任务（批量与单文件），
-// 逐个 job 发整单取消，终态由各自 SSE 的 cancelled 事件统一落到任务行
+// 「全部中断」：取消本列当前运行中的全部任务（批量、单文件与重试），
+// 逐个 job 发整单取消，终态由各自 SSE 的 cancelled 事件统一落到任务行；
+// 排队未启动的重试任务直接出队终态化
 function interruptColumnAll(col) {
   const ids = [];
   ["detect", "trim", "batch"].forEach((k) => {
@@ -949,7 +962,13 @@ function interruptColumnAll(col) {
     const ctx = state.jobTasks.get(jid);
     if (ctx && ctx.col === col) ids.push(jid);
   });
-  if (!ids.length) return;
+  state.retryRunning[col].forEach((t) => {
+    if (t.jobId && !ids.includes(t.jobId)) ids.push(t.jobId);
+  });
+  const queue = state.retryQueues[col];
+  const queuedCount = queue.length;
+  while (queue.length) finalizeTask(queue.shift(), "cancelled", ["已取消（尚未开始）"]);
+  if (!ids.length && !queuedCount) return;
   ids.forEach((jid) => fetch("/api/jobs/" + jid + "/cancel", { method: "POST" }).catch(() => {}));
   setStatus("已请求中断本列全部任务");
 }
@@ -978,44 +997,84 @@ function startRetry(t) {
   if (g) refreshGroupSummary(g);  // 重试使任务回到未完成态，摘要立即跟进
 }
 
-async function retryDetectTask(t) {
-  if (state.jobs.detect) { setStatus("检测任务正在运行中，请稍候"); return; }
-  startRetry(t);
-  try {
-    const res = await fetch("/api/detect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: t.path, params: t.payload.params }),
-    });
-    const data = await res.json();
-    if (!data.ok) { finalizeTask(t, "fail", ["启动检测失败：" + (data.message || "")]); return; }
-    t.jobId = data.job_id;
-    state.jobs.detect = t.jobId;
-    state.jobTasks.set(t.jobId, { kind: "detect", col: "detect", batch: false, tasks: [t] });
-    setTaskRunning(t, "启动中…");
-    openSSE(t.jobId, "detect");
-  } catch (e) { finalizeTask(t, "fail", ["网络错误：" + e.message]); }
+// ---------------- 重试排队 ----------------
+// 重试不再与主流程互斥：每列维护一个队列，调度器按「批处理 → 并发数」
+// （0 = 自动）派发独立单文件任务，排队任务显示等待中，可中断出队。
+function parallelWorkers() {
+  const inp = document.getElementById("param-batch_workers");
+  const n = inp ? Math.floor(Number(inp.value) || 0) : 0;
+  if (n > 0) return Math.min(16, n);
+  const hc = navigator.hardwareConcurrency || 1;
+  return Math.max(1, Math.min(hc, 4));  // 与后端 _parallel_workers 默认策略对齐
 }
 
-async function retryTrimTask(t) {
-  if (state.jobs.trim) { setStatus("裁剪任务正在运行中，请稍候"); return; }
+function retryDetectTask(t) {
   startRetry(t);
-  const params = Object.assign({}, t.payload.params);
-  if (t.payload.frame) { params.start_mode = "frame"; params.start_value = t.payload.frame; }
+  enqueueRetry(t);
+}
+
+function retryTrimTask(t) {
+  startRetry(t);
+  enqueueRetry(t);
+}
+
+function enqueueRetry(t) {
+  state.retryQueues[t.col].push(t);
+  updateTaskActions(t);  // 排队任务可中断（出队即取消）
+  taskEls(t).detail.textContent = "排队中…";
+  pumpRetryQueue(t.col);
+  if (state.retryQueues[t.col].includes(t)) {
+    setStatus("「" + t.name + "」并发已满，已排队等待自动开始");
+  }
+}
+
+function pumpRetryQueue(col) {
+  const queue = state.retryQueues[col];
+  while (queue.length && state.retryRunning[col].size < parallelWorkers()) {
+    const t = queue.shift();
+    if (!tasksOf(col).includes(t)) continue;  // 行已被移除：跳过
+    state.retryRunning[col].add(t);
+    launchRetryJob(t);
+  }
+}
+
+// 重试失败落终态并让队列继续推进（成功路径的推进由 openSSE 的 stop() 负责）
+function finishRetryFailure(t, msg) {
+  state.retryRunning[t.col].delete(t);
+  finalizeTask(t, "fail", [msg]);
+  pumpRetryQueue(t.col);
+}
+
+async function launchRetryJob(t) {
+  const isDetect = t.col === "detect";
+  let body;
+  if (isDetect) {
+    body = { path: t.path, params: t.payload.params };
+  } else {
+    const params = Object.assign({}, t.payload.params);
+    if (t.payload.frame) { params.start_mode = "frame"; params.start_value = t.payload.frame; }
+    body = { path: t.path, output_dir: t.payload.output_dir, params };
+  }
   try {
-    const res = await fetch("/api/trim", {
+    const res = await fetch(isDetect ? "/api/detect" : "/api/trim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: t.path, output_dir: t.payload.output_dir, params }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!data.ok) { finalizeTask(t, "fail", ["启动裁剪失败：" + (data.message || "")]); return; }
+    if (!data.ok) {
+      finishRetryFailure(t, "启动" + (isDetect ? "检测" : "裁剪") + "失败：" + (data.message || ""));
+      return;
+    }
     t.jobId = data.job_id;
-    state.jobs.trim = t.jobId;
-    state.jobTasks.set(t.jobId, { kind: "trim", col: "trim", batch: false, tasks: [t] });
+    state.jobTasks.set(data.job_id, {
+      kind: isDetect ? "detect" : "trim", col: t.col, batch: false, retry: true, tasks: [t],
+    });
     setTaskRunning(t, "启动中…");
-    openSSE(t.jobId, "trim");
-  } catch (e) { finalizeTask(t, "fail", ["网络错误：" + e.message]); }
+    openSSE(data.job_id, isDetect ? "detect" : "trim");
+  } catch (e) {
+    finishRetryFailure(t, "网络错误：" + e.message);
+  }
 }
 
 // ---------------- 批量流程 ----------------
@@ -1107,9 +1166,18 @@ function openSSE(jobId, kind) {
     if (settled) return;
     settled = true;
     es.close();
-    state.jobs[jobKey] = null;
-    state.jobTasks.delete(jobId);
-    updateActions();
+    if (ctx.retry) {
+      // 重试任务不占用主流程槽位：释放并发名额并推进本列队列
+      const t = ctx.tasks[0];
+      state.retryRunning[ctx.col].delete(t);
+      state.jobTasks.delete(jobId);
+      updateActions();
+      pumpRetryQueue(ctx.col);
+    } else {
+      state.jobs[jobKey] = null;
+      state.jobTasks.delete(jobId);
+      updateActions();
+    }
   };
   // 网络层断开兜底：SSE 连接中断可能使终态事件（done/error/cancelled）丢失，
   // 主动查询一次任务状态，确保任务结束后按钮与任务状态不被卡死。
