@@ -5,12 +5,13 @@
 
     python run.py        # 或 py run.py
 
-环境变量（可选）::
+命令行参数（可选，python run.py --help 查看全部）::
 
-    WEBUI_HOST  监听地址，默认 127.0.0.1
-    WEBUI_PORT  监听端口，默认 8765
+    --host     监听地址，默认 127.0.0.1
+    --port     监听端口，默认 29619
+    --workers  批处理并发数兜底值，0 = 自动
 
-启动后浏览器打开 http://127.0.0.1:8765/ 即可使用 Web UI。
+启动后浏览器打开 http://127.0.0.1:29619/ 即可使用 Web UI。
 """
 from __future__ import annotations
 
@@ -23,15 +24,7 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from webui.app import STATE, app  # noqa: E402  (src/webui/app.py)
-
-
-def main() -> None:
-    host = os.environ.get("WEBUI_HOST", "127.0.0.1")
-    port = int(os.environ.get("WEBUI_PORT", "8765"))
-    print(f"TaoMusicEdit Web UI: http://{host}:{port}")
-    print(f"默认工作区: {STATE['workspace']}")
-    app.run(host=host, port=port, threaded=True, debug=False)
+from webui.app import main  # noqa: E402  (src/webui/app.py)
 
 
 if __name__ == "__main__":

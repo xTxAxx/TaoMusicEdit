@@ -23,7 +23,7 @@ TaoMusicEdit/
 
 | 文件 | 职责 | 存放规范 |
 | --- | --- | --- |
-| `run.py` | 统一启动入口：将 `src/` 加入 `sys.path` 后导入 `webui.app` 并启动服务 | 仅保留启动引导，不写业务逻辑 |
+| `run.py` | 统一启动入口：将 `src/` 加入 `sys.path` 后调用 `webui.app.main()` 启动服务 | 仅保留启动引导，不写业务逻辑 |
 | `pytest.ini` | pytest 配置：`testpaths` 限定收集范围，`pythonpath = src` 使测试可直接 `import detector/trimmer/webui` | 测试相关的公共配置放这里 |
 | `README.md` / `STRUCTURE.md` | 项目与结构文档 | 文档只放根目录或对应包内 |
 | `.gitignore` | 忽略规则（缓存、vendored 依赖、运行期产物、视频素材） | 新生成产物需及时补入 |
@@ -61,7 +61,7 @@ TaoMusicEdit/
 | 路径 | 功能定位 |
 | --- | --- |
 | `webui/__init__.py` | 包标记（使 webui 可作为包导入） |
-| `webui/app.py` | Flask 主应用：API 路由、任务编排、检测/裁剪集成（入口：`py run.py` 或 `py src\webui\app.py`） |
+| `webui/app.py` | Flask 主应用：API 路由、任务编排、检测/裁剪集成（入口：`py run.py` 或 `py src\webui\app.py`，支持 `--host / --port / --workers` 启动参数） |
 | `webui/jobs.py` | 异步任务管理器（后台线程 + SSE 进度 + 取消） |
 | `webui/settings.py` | 设置持久化（读写 `src/webui/settings.json`） |
 | `webui/templates/` | Jinja2 模板（`index.html`） |

@@ -11,9 +11,11 @@
 
     python run.py          # 统一入口（推荐）
     py src\\webui\\app.py  # 也可直接运行本文件
+    python run.py --help   # 查看启动参数（--host / --port / --workers）
 """
 from __future__ import annotations
 
+import argparse
 import array
 import json
 import os
@@ -866,11 +868,15 @@ def api_detect():
     return jsonify({"ok": True, "job_id": jid})
 
 
+# 批处理并发数兜底值，由启动参数 --workers 写入（main 中赋值），0 = 自动
+_CLI_BATCH_WORKERS = 0
+
+
 def _parallel_workers() -> int:
     """批处理文件级并行度。
 
     优先级：设置中的 batch.workers（界面「批处理 → 并发数」，0 = 自动）
-    → 环境变量 TAOMUSIC_BATCH_WORKERS → 默认 min(CPU 核数, 4)。
+    → 启动参数 --workers → 默认 min(CPU 核数, 4)。
     """
     try:
         saved = settings_mod.load()
@@ -879,12 +885,8 @@ def _parallel_workers() -> int:
             return min(16, workers)
     except (TypeError, ValueError):
         pass
-    try:
-        env = int(os.environ.get("TAOMUSIC_BATCH_WORKERS", "0"))
-        if env > 0:
-            return env
-    except (TypeError, ValueError):
-        pass
+    if _CLI_BATCH_WORKERS > 0:
+        return _CLI_BATCH_WORKERS
     return max(1, min(os.cpu_count() or 1, 4))
 
 
@@ -1454,9 +1456,38 @@ def job_cancel_file(jid):
     return jsonify({"ok": True})
 
 
-if __name__ == "__main__":
-    host = os.environ.get("WEBUI_HOST", "127.0.0.1")
-    port = int(os.environ.get("WEBUI_PORT", "8765"))
-    print(f"TaoMusicEdit Web UI: http://{host}:{port}")
+def _port_arg(value: str) -> int:
+    """argparse type 回调：端口必须是 1~65535 的整数。"""
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"端口必须是整数：{value!r}")
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"端口需在 1~65535 之间：{port}")
+    return port
+
+
+def _parse_args(argv=None):
+    """解析启动参数；run.py 与直接运行本文件共用同一套参数。"""
+    parser = argparse.ArgumentParser(description="TaoMusicEdit Web UI")
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    parser.add_argument("--port", type=_port_arg, default=29619, help="监听端口（默认 29619）")
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="批处理并发数兜底值，0 = 自动（默认；取 min(CPU 核数, 4)）",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> None:
+    """解析命令行参数并启动 Web UI（run.py 统一入口即调用此函数）。"""
+    global _CLI_BATCH_WORKERS
+    args = _parse_args(argv)
+    _CLI_BATCH_WORKERS = args.workers
+    print(f"TaoMusicEdit Web UI: http://{args.host}:{args.port}")
     print(f"默认工作区: {STATE['workspace']}")
-    app.run(host=host, port=port, threaded=True, debug=False)
+    app.run(host=args.host, port=args.port, threaded=True, debug=False)
+
+
+if __name__ == "__main__":
+    main()
